@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"path"
-	"strconv"
 	"sync"
 	"time"
 
@@ -16,8 +16,10 @@ import (
 	"github.com/minio/madmin-go"
 	miniogo "github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
+	"github.com/minio/minio-go/v7/pkg/s3utils"
 	"github.com/minio/minio-go/v7/pkg/tags"
 	minio "github.com/minio/minio/cmd"
+	"github.com/spf13/viper"
 	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/syndtr/goleveldb/leveldb/opt"
 
@@ -72,12 +74,14 @@ type Mefs struct {
 func (g *Mefs) Name() string {
 	return "lfs"
 }
-func (g *Mefs) new(creds madmin.Credentials, transport http.RoundTripper) (*miniogo.Core, error) {
+
+func (g *Mefs) newS3Client(creds madmin.Credentials, transport http.RoundTripper) (*miniogo.Core, error) {
 	// Override default params if the host is provided
-	endpoint := os.Getenv(ENDPOINT)
-	region := os.Getenv(REGION)
-	accessKey := os.Getenv(ACCESSKEY)
-	secretKey := os.Getenv(SECRETKEY)
+	endpoint := viper.GetString("s3.endpoint")
+	region := viper.GetString("s3.region")
+	accessKey := viper.GetString("s3.accesskey")
+	secretKey := viper.GetString("s3.secretkey")
+
 	optionsStaticCreds := &miniogo.Options{
 		Creds:        credentials.NewStaticV4(accessKey, secretKey, ""),
 		Secure:       false,
@@ -98,7 +102,6 @@ func (g *Mefs) new(creds madmin.Credentials, transport http.RoundTripper) (*mini
 // NewGatewayLayer implements Gateway interface and returns LFS ObjectLayer.
 func (g *Mefs) NewGatewayLayer(creds madmin.Credentials) (minio.ObjectLayer, error) {
 	//uploads := NewMultipartUploads()
-
 	metrics := minio.NewMetrics()
 
 	t := &minio.MetricsTransport{
@@ -108,58 +111,31 @@ func (g *Mefs) NewGatewayLayer(creds madmin.Credentials) (minio.ObjectLayer, err
 
 	var err error
 	// 读取设定好的bucketName
-	BucketName = os.Getenv(BUCKETNAME)
+	BucketName = viper.GetString("common.bucketname")
 	if len(BucketName) == 0 {
 		return nil, errors.New("bucketname not set")
 	}
 
+	fmt.Println("Use Bucket: ", BucketName)
+
+	if err := s3utils.CheckValidBucketNameStrict(BucketName); err != nil {
+		return nil, minio.BucketNameInvalid{Bucket: BucketName, Err: err}
+	}
+
 	// 读取设定好的可上传字节数
-	maxBytes := os.Getenv(MAXUPLOADEDBYTES)
-	if len(maxBytes) == 0 {
-		return nil, errors.New("maxBytes not set")
+	MaxUploadableBytes = viper.GetUint64("common.max_upload_bytes")
+	if MaxUploadableBytes == 0 {
+		return nil, errors.New("upload bytes not set")
 	}
 
-	MaxUploadedBytes, err = strconv.ParseUint(maxBytes, 10, 64)
-	if err != nil {
-		return nil, err
-	}
-
-	clnt, err := g.new(creds, t)
-	if err != nil {
-		return nil, err
-	}
+	fmt.Println("Maximum uploadable bytes: ", BucketName)
 
 	rootpath, err := utils.BestKnownPath()
 	if err != nil {
 		return nil, err
 	}
 
-	// 检查是否有指定的bucket
-	ctx := context.TODO()
-	bs, err := clnt.ListBuckets(ctx)
-	if err != nil {
-		return nil, err
-	}
-
-	for i := 0; i < len(bs); i++ {
-		if bs[i].Name == BucketName {
-			break
-		}
-
-		// 如果没有就创建这个bucket
-		if i >= len(bs)-1 {
-			if utils.CheckValidBucketName(BucketName) != nil {
-				return nil, minio.BucketNameInvalid{Bucket: BucketName}
-			}
-
-			err = clnt.MakeBucket(ctx,
-				BucketName,
-				miniogo.MakeBucketOptions{Region: REGION})
-			if err != nil {
-				return nil, err
-			}
-		}
-	}
+	fmt.Println("Gateway root dir: ", rootpath)
 
 	db, err := leveldb.OpenFile(path.Join(rootpath, "db"), &opt.Options{})
 	if err != nil {
@@ -167,10 +143,72 @@ func (g *Mefs) NewGatewayLayer(creds madmin.Credentials) (minio.ObjectLayer, err
 	}
 
 	gw := &lfsGateway{
-		Client: clnt,
-		db:     db,
+		rootpath: rootpath,
+		db:       db,
 	}
 
+	gw.useLocal = viper.GetBool("common.use_local")
+	gw.useS3 = viper.GetBool("common.use_s3")
+
+	if !gw.useLocal && !gw.useS3 {
+		return nil, errors.New("must choose a backend")
+	}
+
+	// 是否使用本地路径
+	if gw.useLocal {
+		localfs, err := utils.OpenLocalFS(path.Join(rootpath, "local"))
+		if err != nil {
+			return nil, err
+		}
+
+		err = localfs.CheckBucket(BucketName)
+		if err != nil {
+			err = localfs.MakeBucket(BucketName)
+			if err != nil {
+				return nil, err
+			}
+
+		}
+		gw.localfs = localfs
+	}
+
+	// 是否需要连接上某个s3
+	if gw.useS3 {
+		clnt, err := g.newS3Client(creds, t)
+		if err != nil {
+			return nil, err
+		}
+
+		// 检查是否有指定的bucket
+		ctx := context.TODO()
+		bs, err := clnt.ListBuckets(ctx)
+		if err != nil {
+			return nil, err
+		}
+
+		// 扫描所有的Bucket进行判断
+		for i := 0; i < len(bs); i++ {
+			if bs[i].Name == BucketName {
+				break
+			}
+
+			// 如果没有就创建这个bucket
+			if i >= len(bs)-1 {
+				region := viper.GetString("s3.region")
+				err = clnt.MakeBucket(ctx,
+					BucketName,
+					miniogo.MakeBucketOptions{Region: region})
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+
+		// 设置s3 client
+		gw.Client = clnt
+	}
+
+	// 读取已使用的空间大小
 	err = gw.readUsedBytes()
 	if err != nil {
 		return nil, err
@@ -189,9 +227,15 @@ type lfsGateway struct {
 	minio.GatewayUnsupported
 	// multipart *MultipartUploads
 	sync.Mutex
-	Client    *miniogo.Core
-	db        *leveldb.DB
+	rootpath string
+
+	useS3     bool
+	useLocal  bool
 	usedBytes uint64
+
+	localfs *utils.LocalFS
+	Client  *miniogo.Core
+	db      *leveldb.DB
 }
 
 func (l *lfsGateway) readUsedBytes() error {
@@ -239,12 +283,14 @@ func (l *lfsGateway) Shutdown(ctx context.Context) error {
 // StorageInfo is not relevant to LFS backend.
 func (l *lfsGateway) StorageInfo(ctx context.Context) (si minio.StorageInfo, errs []error) {
 	si.Backend.Type = madmin.Gateway
-	si.Backend.GatewayOnline = l.Client.IsOnline()
+	if l.useS3 {
+		si.Backend.GatewayOnline = l.Client.IsOnline()
+	}
 
 	si.Disks = make([]madmin.Disk, 1)
 	si.Disks[0].DiskIndex = 0
 	si.Disks[0].UsedSpace = l.usedBytes
-	si.Disks[0].TotalSpace = MaxUploadedBytes
+	si.Disks[0].TotalSpace = MaxUploadableBytes
 
 	return si, nil
 }
@@ -274,31 +320,37 @@ func (l *lfsGateway) GetBucketInfo(ctx context.Context, bucket string) (bi minio
 		return bi, minio.BucketNotFound{Bucket: bucket}
 	}
 
-	buckets, err := l.Client.ListBuckets(ctx)
-	if err != nil {
-		// Listbuckets may be disallowed, proceed to check if
-		// bucket indeed exists, if yes return success.
-		var ok bool
-		if ok, err = l.Client.BucketExists(ctx, bucket); err != nil {
-			return bi, minio.ErrorRespToObjectError(err, bucket)
-		}
-		if !ok {
-			return bi, minio.BucketNotFound{Bucket: bucket}
-		}
-		return minio.BucketInfo{
-			Name:    bi.Name,
-			Created: time.Now().UTC(),
-		}, nil
-	}
-
-	for _, bi := range buckets {
-		if bi.Name != bucket {
-			continue
+	if l.useS3 {
+		buckets, err := l.Client.ListBuckets(ctx)
+		if err != nil {
+			// Listbuckets may be disallowed, proceed to check if
+			// bucket indeed exists, if yes return success.
+			var ok bool
+			if ok, err = l.Client.BucketExists(ctx, bucket); err != nil {
+				return bi, minio.ErrorRespToObjectError(err, bucket)
+			}
+			if !ok {
+				return bi, minio.BucketNotFound{Bucket: bucket}
+			}
+			return minio.BucketInfo{
+				Name:    bi.Name,
+				Created: time.Now().UTC(),
+			}, nil
 		}
 
+		for _, bi := range buckets {
+			if bi.Name != bucket {
+				continue
+			}
+
+			return minio.BucketInfo{
+				Name:    bi.Name,
+				Created: bi.CreationDate,
+			}, nil
+		}
+	} else {
 		return minio.BucketInfo{
-			Name:    bi.Name,
-			Created: bi.CreationDate,
+			Name: bucket,
 		}, nil
 	}
 
@@ -307,20 +359,28 @@ func (l *lfsGateway) GetBucketInfo(ctx context.Context, bucket string) (bi minio
 
 // ListBuckets lists all LFS buckets.
 func (l *lfsGateway) ListBuckets(ctx context.Context) (bs []minio.BucketInfo, err error) {
-	buckets, err := l.Client.ListBuckets(ctx)
-	if err != nil {
-		return nil, minio.ErrorRespToObjectError(err)
+	bs = make([]minio.BucketInfo, 0, 1)
+	if l.useS3 {
+		buckets, err := l.Client.ListBuckets(ctx)
+		if err != nil {
+			return nil, minio.ErrorRespToObjectError(err)
+		}
+
+		for _, bi := range buckets {
+			if bi.Name == BucketName {
+				bs = append(bs, minio.BucketInfo{
+					Name:    bi.Name,
+					Created: bi.CreationDate,
+				})
+			}
+		}
+
+		return bs, err
 	}
 
-	bs = make([]minio.BucketInfo, 0, 1)
-	for _, bi := range buckets {
-		if bi.Name == BucketName {
-			bs = append(bs, minio.BucketInfo{
-				Name:    bi.Name,
-				Created: bi.CreationDate,
-			})
-		}
-	}
+	bs = append(bs, minio.BucketInfo{
+		Name: BucketName,
+	})
 
 	return bs, err
 }
@@ -340,12 +400,18 @@ func (l *lfsGateway) ListObjects(ctx context.Context, bucket, prefix, marker, de
 	if bucket != BucketName {
 		return loi, minio.BucketNotFound{Bucket: bucket}
 	}
-	result, err := l.Client.ListObjects(bucket, prefix, marker, delimiter, maxKeys)
-	if err != nil {
-		return loi, minio.ErrorRespToObjectError(err, bucket)
+
+	if l.useS3 {
+		result, err := l.Client.ListObjects(bucket, prefix, marker, delimiter, maxKeys)
+		if err != nil {
+			return loi, minio.ErrorRespToObjectError(err, bucket)
+		}
+
+		return minio.FromMinioClientListBucketResult(bucket, result), nil
 	}
 
-	return minio.FromMinioClientListBucketResult(bucket, result), nil
+	return l.localfs.ListObjects(bucket)
+
 }
 
 // ListObjectsV2 lists all blobs in LFS bucket filtered by prefix
@@ -355,12 +421,16 @@ func (l *lfsGateway) ListObjectsV2(ctx context.Context, bucket, prefix, continua
 		return loiv2, minio.BucketNotFound{Bucket: bucket}
 	}
 
-	result, err := l.Client.ListObjectsV2(bucket, prefix, startAfter, continuationToken, delimiter, maxKeys)
-	if err != nil {
-		return loiv2, minio.ErrorRespToObjectError(err, bucket)
+	if l.useS3 {
+		result, err := l.Client.ListObjectsV2(bucket, prefix, startAfter, continuationToken, delimiter, maxKeys)
+		if err != nil {
+			return loiv2, minio.ErrorRespToObjectError(err, bucket)
+		}
+
+		return minio.FromMinioClientListBucketV2Result(bucket, result), nil
 	}
 
-	return minio.FromMinioClientListBucketV2Result(bucket, result), nil
+	return l.localfs.ListObjectsV2(bucket)
 }
 
 // GetObjectNInfo - returns object info and locked object ReadCloser
@@ -368,6 +438,7 @@ func (l *lfsGateway) GetObjectNInfo(ctx context.Context, bucket, object string, 
 	if bucket != BucketName {
 		return nil, minio.BucketNotFound{Bucket: bucket}
 	}
+
 	var objInfo minio.ObjectInfo
 	objInfo, err = l.GetObjectInfo(ctx, bucket, object, opts)
 	if err != nil {
@@ -391,18 +462,50 @@ func (l *lfsGateway) GetObjectNInfo(ctx context.Context, bucket, object string, 
 	return fn(pr, h, pipeCloser)
 }
 
+// InvalidRange - invalid range typed error.
+type InvalidRange struct {
+	OffsetBegin  int64
+	OffsetEnd    int64
+	ResourceSize int64
+}
+
+func (e InvalidRange) Error() string {
+	return fmt.Sprintf("The requested range \"bytes %d -> %d of %d\" is not satisfiable.", e.OffsetBegin, e.OffsetEnd, e.ResourceSize)
+}
+
 // GetObject reads an object on LFS. Supports additional
 // parameters like offset and length which are synonymous with
 // HTTP Range requests.
 //
 // startOffset indicates the starting read location of the object.
 // length indicates the total length of the object.
-func (l *lfsGateway) GetObject(ctx context.Context, bucket, key string, startOffset, length int64, writer io.Writer, etag string, o minio.ObjectOptions) error {
-	if bucket != BucketName {
-		return minio.BucketNotFound{Bucket: bucket}
+func (l *lfsGateway) GetObject(ctx context.Context, bucketName, objectName string, startOffset, length int64, writer io.Writer, etag string, o minio.ObjectOptions) error {
+	if bucketName != BucketName {
+		return minio.BucketNotFound{Bucket: bucketName}
 	}
+
 	if length < 0 && length != -1 {
-		return minio.ErrorRespToObjectError(minio.InvalidRange{}, bucket, key)
+		return minio.ErrorRespToObjectError(minio.InvalidRange{}, bucketName, objectName)
+	}
+
+	if l.useLocal {
+		object, size, err := l.localfs.GetObject(bucketName, objectName, startOffset)
+		if err == nil {
+			defer object.Close()
+			reader := io.LimitReader(object, length)
+
+			// Check if range is valid
+			if startOffset > size || startOffset+length > size {
+				err = InvalidRange{startOffset, length, size}
+				return err
+			}
+
+			if _, err := io.Copy(writer, reader); err != nil {
+				return minio.ErrorRespToObjectError(err, bucketName, objectName)
+			}
+
+			return nil
+		}
 	}
 
 	opts := miniogo.GetObjectOptions{}
@@ -410,7 +513,7 @@ func (l *lfsGateway) GetObject(ctx context.Context, bucket, key string, startOff
 
 	if startOffset >= 0 && length >= 0 {
 		if err := opts.SetRange(startOffset, startOffset+length-1); err != nil {
-			return minio.ErrorRespToObjectError(err, bucket, key)
+			return minio.ErrorRespToObjectError(err, bucketName, objectName)
 		}
 	}
 
@@ -418,14 +521,15 @@ func (l *lfsGateway) GetObject(ctx context.Context, bucket, key string, startOff
 		opts.SetMatchETag(etag)
 	}
 
-	object, _, _, err := l.Client.GetObject(ctx, bucket, key, opts)
+	object, _, _, err := l.Client.GetObject(ctx, bucketName, objectName, opts)
 	if err != nil {
-		return minio.ErrorRespToObjectError(err, bucket, key)
+		return minio.ErrorRespToObjectError(err, bucketName, objectName)
 	}
 	defer object.Close()
 	if _, err := io.Copy(writer, object); err != nil {
-		return minio.ErrorRespToObjectError(err, bucket, key)
+		return minio.ErrorRespToObjectError(err, bucketName, objectName)
 	}
+
 	return nil
 }
 
@@ -446,14 +550,20 @@ func (l *lfsGateway) GetObjectInfo(ctx context.Context, bucket, object string, o
 	//}
 	//
 	//return objInfo, nil
-	oi, err := l.Client.StatObject(ctx, bucket, object, miniogo.StatObjectOptions{
-		ServerSideEncryption: opts.ServerSideEncryption,
-	})
-	if err != nil {
-		return minio.ObjectInfo{}, minio.ErrorRespToObjectError(err, bucket, object)
+
+	if l.useS3 {
+		oi, err := l.Client.StatObject(ctx, bucket, object, miniogo.StatObjectOptions{
+			ServerSideEncryption: opts.ServerSideEncryption,
+		})
+
+		if err != nil {
+			return minio.ObjectInfo{}, minio.ErrorRespToObjectError(err, bucket, object)
+		}
+
+		return minio.FromMinioClientObjectInfo(bucket, oi), nil
 	}
 
-	return minio.FromMinioClientObjectInfo(bucket, oi), nil
+	return l.localfs.GetObjectInfo(bucket, object)
 }
 
 // PutObject creates a new object with the incoming data.
@@ -472,6 +582,7 @@ func (l *lfsGateway) PutObject(ctx context.Context, bucket, object string, r *mi
 		tagMap = tagObj.ToMap()
 		delete(opts.UserDefined, "X-Amz-Tagging")
 	}
+
 	putOpts := miniogo.PutObjectOptions{
 		UserMetadata:         opts.UserDefined,
 		ServerSideEncryption: opts.ServerSideEncryption,
@@ -479,28 +590,63 @@ func (l *lfsGateway) PutObject(ctx context.Context, bucket, object string, r *mi
 		SendContentMd5:       true,
 	}
 
-	var reader io.Reader = data
+	var limitedReader *utils.LimitedReader
+
 	// 限制上传总量
 	if data.Size() == -1 {
-		reader = newLimitedReader(data, MaxUploadedBytes-l.usedBytes)
-	} else if uint64(data.Size()) > MaxUploadedBytes-l.usedBytes {
+		limitedReader = utils.LimitReader(data, MaxUploadableBytes-l.usedBytes)
+		//大小符合预期
+	} else if uint64(data.Size()) < MaxUploadableBytes-l.usedBytes {
+		limitedReader = utils.LimitReader(data, uint64(data.Size()))
+		// 大小超标
+	} else {
 		return objInfo, errSpaceOverflow
 	}
 
-	ui, err := l.Client.PutObject(ctx, bucket, object, reader, data.Size(), data.MD5Base64String(), data.SHA256HexString(), putOpts)
-	if err != nil {
-		return objInfo, minio.ErrorRespToObjectError(err, bucket, object)
+	var reader io.Reader = limitedReader
+	var closer io.Closer
+
+	var oi miniogo.ObjectInfo
+
+	// 如果要存到本地
+	if l.useLocal {
+		reader, closer, err = l.localfs.PutObject(bucket, object, reader)
+		if err != nil {
+			return objInfo, minio.ErrorRespToObjectError(err, bucket, object)
+		}
 	}
-	// On success, populate the key & metadata so they are present in the notification
-	oi := miniogo.ObjectInfo{
-		ETag:     ui.ETag,
-		Size:     ui.Size,
-		Key:      object,
-		Metadata: minio.ToMinioClientObjectInfoMetadata(opts.UserDefined),
+
+	if l.useS3 {
+		ui, err := l.Client.PutObject(ctx, bucket, object, reader, data.Size(), data.MD5Base64String(), data.SHA256HexString(), putOpts)
+		if err != nil {
+			return objInfo, minio.ErrorRespToObjectError(err, bucket, object)
+		}
+
+		// On success, populate the key & metadata so they are present in the notification
+		oi = miniogo.ObjectInfo{
+			ETag:     ui.ETag,
+			Size:     ui.Size,
+			Key:      object,
+			Metadata: minio.ToMinioClientObjectInfoMetadata(opts.UserDefined),
+		}
+	} else {
+		w := &utils.EmptyWriter{}
+		_, err := io.Copy(w, reader)
+		if err != nil {
+			return objInfo, minio.ErrorRespToObjectError(err, bucket, object)
+		}
+	}
+
+	if l.useLocal {
+		closer.Close()
+		err = l.localfs.FinishPut(bucket, object)
+		if err != nil {
+			return objInfo, minio.ErrorRespToObjectError(err, bucket, object)
+		}
 	}
 
 	// 记录新增的存储空间
-	l.addUsedBytes(uint64(ui.Size))
+	l.addUsedBytes(limitedReader.ReadedBytes())
 
 	return minio.FromMinioClientObjectInfo(bucket, oi), nil
 }

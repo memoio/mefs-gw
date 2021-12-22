@@ -1,0 +1,12 @@
+[common]
+use_local = true
+use_s3 = false
+max_upload_bytes = 1099511627776 # 1TiB
+bucketname = "mefstest" # set bucketname the gateway to use
+root_dir = "~/.mefs_gw"
+
+[s3]
+endpoint = "S3_ENDPOINT"
+region = "S3_REGION"
+accesskey = "S3_ACCESSKEY"
+secretkey = "S3_SECRETKEY"

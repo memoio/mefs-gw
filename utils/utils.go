@@ -1,16 +1,17 @@
 package utils
 
 import (
-	"errors"
 	"os"
-	"regexp"
+	"path"
+	"runtime"
 	"strings"
 
 	"github.com/mitchellh/go-homedir"
 )
 
-const DefaultPathRoot = "~/.mefs_gw"
 const GATEWAYPATH = "GATEWAYPATH"
+
+var DefaultPathRoot = "~/.mefs_gw"
 
 // BestKnownPath returns the best known fsrepo path. If the ENV override is
 // present, this function returns that value. Otherwise, it returns the default
@@ -35,40 +36,28 @@ func BestKnownPath() (string, error) {
 	return mefsPath, nil
 }
 
-var (
-	validBucketName       = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9\.\-\_\:]{1,61}[A-Za-z0-9]$`)
-	validBucketNameStrict = regexp.MustCompile(`^[a-z0-9][a-z0-9\.\-]{1,61}[a-z0-9]$`)
-	ipAddress             = regexp.MustCompile(`^(\d+\.){3}\d+$`)
-)
+const globalWindowsOSName = "windows"
 
-func CheckValidBucketName(bucketName string) (err error) {
-	return checkBucketNameCommon(bucketName, false)
+// HasSuffix - Suffix matcher string matches suffix in a platform specific way.
+// For example on windows since its case insensitive we are supposed
+// to do case insensitive checks.
+func HasSuffix(s string, suffix string) bool {
+	if runtime.GOOS == globalWindowsOSName {
+		return strings.HasSuffix(strings.ToLower(s), strings.ToLower(suffix))
+	}
+	return strings.HasSuffix(s, suffix)
 }
 
-func checkBucketNameCommon(bucketName string, strict bool) (err error) {
-	if strings.TrimSpace(bucketName) == "" {
-		return errors.New("Bucket name cannot be empty")
-	}
-	if len(bucketName) < 3 {
-		return errors.New("Bucket name cannot be shorter than 3 characters")
-	}
-	if len(bucketName) > 63 {
-		return errors.New("Bucket name cannot be longer than 63 characters")
-	}
-	if ipAddress.MatchString(bucketName) {
-		return errors.New("Bucket name cannot be an ip address")
-	}
-	if strings.Contains(bucketName, "..") || strings.Contains(bucketName, ".-") || strings.Contains(bucketName, "-.") {
-		return errors.New("Bucket name contains invalid characters")
-	}
-	if strict {
-		if !validBucketNameStrict.MatchString(bucketName) {
-			err = errors.New("Bucket name contains invalid characters")
+// SlashSeparator - slash separator.
+const SlashSeparator = "/"
+
+// pathJoin - like path.Join() but retains trailing SlashSeparator of the last element
+func pathJoin(elem ...string) string {
+	trailingSlash := ""
+	if len(elem) > 0 {
+		if HasSuffix(elem[len(elem)-1], SlashSeparator) {
+			trailingSlash = SlashSeparator
 		}
-		return err
 	}
-	if !validBucketName.MatchString(bucketName) {
-		err = errors.New("Bucket name contains invalid characters")
-	}
-	return err
+	return path.Join(elem...) + trailingSlash
 }
