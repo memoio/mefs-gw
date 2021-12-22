@@ -7,16 +7,20 @@ import (
 	"os/signal"
 	"syscall"
 
+	"github.com/mitchellh/go-homedir"
 	"github.com/spf13/cobra"
+	"github.com/spf13/viper"
 
 	"github.com/memoio/mefs-gateway/miniogw"
+	"github.com/memoio/mefs-gateway/utils"
 )
 
 var (
-	username string
-	pwd      string
-	endPoint string
+	username       string
+	pwd            string
+	endPoint       string
 	consoleAddress string
+	configPath     string
 )
 
 var runCmd = &cobra.Command{
@@ -31,7 +35,22 @@ var runCmd = &cobra.Command{
 		signal.Notify(terminate, os.Interrupt, syscall.SIGTERM)
 		defer signal.Stop(terminate)
 
-		err := miniogw.Start(username, pwd, endPoint, consoleAddress)
+		confPath, err := homedir.Expand(configPath)
+		if err != nil {
+			return err
+		}
+
+		err = utils.ReadConfig(confPath)
+		if err != nil {
+			return err
+		}
+
+		// 设置根路径
+		if rootDir := viper.GetString("common.root_dir"); rootDir != "" {
+			utils.DefaultPathRoot = rootDir
+		}
+
+		err = miniogw.Start(username, pwd, endPoint, consoleAddress)
 		if err != nil {
 			return err
 		}
@@ -50,4 +69,5 @@ func init() {
 	runCmd.Flags().StringVarP(&pwd, "password", "p", "", "input your password")
 	runCmd.Flags().StringVarP(&endPoint, "endpoint", "e", "0.0.0.0:5080", "input the s3 endpoint")
 	runCmd.Flags().StringVarP(&consoleAddress, "console-address", "c", ":8080", "console-address")
+	runCmd.Flags().StringVarP(&configPath, "config-path", "", ".", "the path of config.toml")
 }
