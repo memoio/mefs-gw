@@ -4,9 +4,10 @@ use_s3 = false
 max_upload_bytes = 1099511627776 # 1TiB
 bucketname = "mefstest" # set bucketname the gateway to use
 root_dir = "~/.mefs_gw"
+local_dir = ""
 
 [s3]
-endpoint = "S3_ENDPOINT"
-region = "S3_REGION"
-accesskey = "S3_ACCESSKEY"
-secretkey = "S3_SECRETKEY"
+endpoint = "s3-qos.my-sz-1.qiniu-solutions.com:29091"
+region = "z0"
+accesskey = "22taR9gKak3fXfDYT-GqSjxGc_uslfiNC0ocxPK_"
+secretkey = "VHr2Q1q3dRfZ7nXZPUnmRtlM0Wh_hDAWbzniSIlZ"

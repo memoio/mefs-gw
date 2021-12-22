@@ -156,7 +156,12 @@ func (g *Mefs) NewGatewayLayer(creds madmin.Credentials) (minio.ObjectLayer, err
 
 	// 是否使用本地路径
 	if gw.useLocal {
-		localfs, err := utils.OpenLocalFS(path.Join(rootpath, "local"))
+		localDir := viper.GetString("common.local_dir")
+		if localDir == "" {
+			localDir = path.Join(rootpath, "local")
+		}
+		fmt.Println("Use local fs: ", localDir)
+		localfs, err := utils.OpenLocalFS(localDir)
 		if err != nil {
 			return nil, err
 		}
@@ -174,6 +179,7 @@ func (g *Mefs) NewGatewayLayer(creds madmin.Credentials) (minio.ObjectLayer, err
 
 	// 是否需要连接上某个s3
 	if gw.useS3 {
+		fmt.Println("Use s3 backend")
 		clnt, err := g.newS3Client(creds, t)
 		if err != nil {
 			return nil, err
@@ -505,6 +511,10 @@ func (l *lfsGateway) GetObject(ctx context.Context, bucketName, objectName strin
 			}
 
 			return nil
+		}
+
+		if !l.useS3 {
+			return minio.ObjectNotFound{Bucket: bucketName, Object: objectName}
 		}
 	}
 
