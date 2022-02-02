@@ -149,6 +149,7 @@ func (g *Mefs) NewGatewayLayer(creds madmin.Credentials) (minio.ObjectLayer, err
 
 	gw.useLocal = viper.GetBool("common.use_local")
 	gw.useS3 = viper.GetBool("common.use_s3")
+	gw.readOnly = viper.GetBool("common.read_only")
 
 	if !gw.useLocal && !gw.useS3 {
 		return nil, errors.New("must choose a backend")
@@ -237,6 +238,7 @@ type lfsGateway struct {
 
 	useS3     bool
 	useLocal  bool
+	readOnly  bool
 	usedBytes uint64
 
 	localfs *utils.LocalFS
@@ -580,6 +582,10 @@ func (l *lfsGateway) GetObjectInfo(ctx context.Context, bucket, object string, o
 func (l *lfsGateway) PutObject(ctx context.Context, bucket, object string, r *minio.PutObjReader, opts minio.ObjectOptions) (objInfo minio.ObjectInfo, err error) {
 	if bucket != BucketName {
 		return objInfo, minio.BucketNotFound{Bucket: bucket}
+	}
+
+	if l.readOnly {
+		return objInfo, minio.PrefixAccessDenied{Bucket: bucket}
 	}
 
 	data := r.Reader
