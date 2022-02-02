@@ -16,11 +16,9 @@ import (
 )
 
 var (
-	username       string
-	pwd            string
-	endPoint       string
-	consoleAddress string
-	configPath     string
+	username   string
+	pwd        string
+	configPath string
 )
 
 var runCmd = &cobra.Command{
@@ -50,6 +48,9 @@ var runCmd = &cobra.Command{
 			utils.DefaultPathRoot = rootDir
 		}
 
+		endPoint := viper.GetString("common.endpoint")
+		consoleAddress := viper.GetString("common.console")
+
 		err = miniogw.Start(username, pwd, endPoint, consoleAddress)
 		if err != nil {
 			return err
@@ -67,7 +68,5 @@ var runCmd = &cobra.Command{
 func init() {
 	runCmd.Flags().StringVarP(&username, "name", "n", "", "input your user name")
 	runCmd.Flags().StringVarP(&pwd, "password", "p", "", "input your password")
-	runCmd.Flags().StringVarP(&endPoint, "endpoint", "e", "0.0.0.0:5080", "input the s3 endpoint")
-	runCmd.Flags().StringVarP(&consoleAddress, "console-address", "c", ":8080", "console-address")
 	runCmd.Flags().StringVarP(&configPath, "config-path", "", ".", "the path of config.toml")
 }
