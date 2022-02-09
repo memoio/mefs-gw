@@ -167,7 +167,7 @@ func (g *Mefs) NewGatewayLayer(creds madmin.Credentials) (minio.ObjectLayer, err
 			return nil, err
 		}
 
-		err = localfs.CheckBucket(BucketName)
+		err = localfs.CheckBucketExist(BucketName)
 		if err != nil {
 			err = localfs.MakeBucket(BucketName)
 			if err != nil {
@@ -635,6 +635,13 @@ func (l *lfsGateway) PutObject(ctx context.Context, bucket, object string, r *mi
 	if l.useS3 {
 		ui, err := l.Client.PutObject(ctx, bucket, object, reader, data.Size(), data.MD5Base64String(), data.SHA256HexString(), putOpts)
 		if err != nil {
+			if l.useLocal {
+				closer.Close()
+				err = l.localfs.FinishPut(bucket, object, 0, false)
+				if err != nil {
+					return objInfo, minio.ErrorRespToObjectError(err, bucket, object)
+				}
+			}
 			return objInfo, minio.ErrorRespToObjectError(err, bucket, object)
 		}
 
@@ -649,13 +656,28 @@ func (l *lfsGateway) PutObject(ctx context.Context, bucket, object string, r *mi
 		w := &utils.EmptyWriter{}
 		_, err := io.Copy(w, reader)
 		if err != nil {
+			if l.useLocal {
+				closer.Close()
+				err = l.localfs.FinishPut(bucket, object, 0, false)
+				if err != nil {
+					return objInfo, minio.ErrorRespToObjectError(err, bucket, object)
+				}
+			}
+
 			return objInfo, minio.ErrorRespToObjectError(err, bucket, object)
+		}
+
+		// On success, populate the key & metadata so they are present in the notification
+		oi = miniogo.ObjectInfo{
+			Size:     w.Size(),
+			Key:      object,
+			Metadata: minio.ToMinioClientObjectInfoMetadata(opts.UserDefined),
 		}
 	}
 
 	if l.useLocal {
 		closer.Close()
-		err = l.localfs.FinishPut(bucket, object)
+		err = l.localfs.FinishPut(bucket, object, oi.Size, true)
 		if err != nil {
 			return objInfo, minio.ErrorRespToObjectError(err, bucket, object)
 		}
