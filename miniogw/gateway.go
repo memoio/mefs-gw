@@ -788,3 +788,19 @@ func (l *lfsGateway) DeleteObjects(ctx context.Context, bucket string, objects [
 func (l *lfsGateway) IsCompressionSupported() bool {
 	return false
 }
+
+func (l *lfsGateway) StatObject(ctx context.Context, bucket, object string, opts minio.ObjectOptions) (minio.ObjectInfo, error) {
+	if bucket != BucketName {
+		return minio.ObjectInfo{}, minio.BucketNotFound{Bucket: bucket}
+	}
+
+	oi, err := l.Client.StatObject(ctx, bucket, object, miniogo.StatObjectOptions{
+		ServerSideEncryption: opts.ServerSideEncryption,
+	})
+
+	if err != nil {
+		return minio.ObjectInfo{}, minio.ErrorRespToObjectError(err, bucket, object)
+	}
+
+	return minio.FromMinioClientObjectInfo(bucket, oi), nil
+}
