@@ -4,20 +4,27 @@ go 1.16
 
 require (
 	github.com/ipfs/go-blockservice v0.2.1
-	github.com/ipfs/go-datastore v0.5.0
-	github.com/ipfs/go-ipfs-blockstore v0.2.1
+	github.com/ipfs/go-datastore v0.5.1
+	github.com/ipfs/go-ipfs-blockstore v1.1.2
 	github.com/ipfs/go-ipfs-chunker v0.0.5
 	github.com/ipfs/go-ipfs-exchange-offline v0.1.1
 	github.com/ipfs/go-ipld-format v0.2.0
 	github.com/ipfs/go-merkledag v0.5.1
 	github.com/ipfs/go-unixfs v0.3.1
+	github.com/memoio/go-mefs-v2 v0.0.0-00010101000000-000000000000
 	github.com/minio/cli v1.22.0
-	github.com/minio/madmin-go v1.1.12
-	github.com/minio/minio v0.0.0-20211109232808-0a6f9bc1eb54
-	github.com/minio/minio-go/v7 v7.0.15
+	github.com/minio/madmin-go v1.3.5
+	github.com/minio/minio v0.0.0-20220308074058-21d8298fe19c
+	github.com/minio/minio-go/v7 v7.0.23
 	github.com/mitchellh/go-homedir v1.1.0
-	github.com/spf13/cobra v1.2.1
-	github.com/spf13/viper v1.10.0
-	github.com/syndtr/goleveldb v1.0.0
-	golang.org/x/crypto v0.0.0-20210921155107-089bfa567519
+	github.com/spf13/cobra v1.3.0
+	github.com/spf13/viper v1.10.1
+	github.com/syndtr/goleveldb v1.0.1-0.20210819022825-2ae1ddf74ef7
+	golang.org/x/crypto v0.0.0-20220307211146-efcb8507fb70
+)
+
+replace (
+	github.com/memoio/go-mefs-v2 => ../go-mefs-v2
+	github.com/minio/minio => ../minio
+	memoc => ../memo-go-contracts-v2
 )
