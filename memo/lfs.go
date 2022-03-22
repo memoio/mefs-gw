@@ -1,14 +1,24 @@
 package memo
 
 import (
+	"bytes"
 	"context"
+	"crypto/md5"
+	"crypto/sha256"
 	"errors"
 	"io"
 	"net/http"
 
+	"github.com/ipfs/go-cid"
+	mh "github.com/multiformats/go-multihash"
+	"golang.org/x/xerrors"
+
 	mclient "github.com/memoio/go-mefs-v2/api/client"
+	"github.com/memoio/go-mefs-v2/build"
 	mcode "github.com/memoio/go-mefs-v2/lib/code"
+	"github.com/memoio/go-mefs-v2/lib/types"
 	mtypes "github.com/memoio/go-mefs-v2/lib/types"
+	"github.com/memoio/go-mefs-v2/lib/utils/etag"
 )
 
 type MemoFs struct {
@@ -87,19 +97,83 @@ func (m *MemoFs) ListObjects(ctx context.Context, bucket string) (mloi []*mtypes
 	return mloi, nil
 }
 
-func (m *MemoFs) GetObject(ctx context.Context, bucketName, objectName string) ([]byte, error) {
+func (m *MemoFs) GetObject(ctx context.Context, bucketName, objectName string, writer io.Writer) error {
 	napi, closer, err := mclient.NewUserNode(ctx, m.addr, m.headers)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer closer()
 
-	doo := mtypes.DefaultDownloadOption()
-	data, err := napi.GetObject(ctx, bucketName, objectName, doo)
+	objInfo, err := napi.HeadObject(ctx, bucketName, objectName)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	return data, nil
+
+	buInfo, err := napi.HeadBucket(ctx, bucketName)
+	if err != nil {
+		return err
+	}
+
+	h := md5.New()
+	if len(objInfo.ETag) != md5.Size {
+		h = sha256.New()
+	}
+
+	stripeCnt := 4 * 64 / buInfo.DataCount
+	stepLen := int64(build.DefaultSegSize * stripeCnt * buInfo.DataCount)
+	start := int64(0)
+	oSize := int64(objInfo.Size)
+
+	for start < oSize {
+		readLen := stepLen
+		if oSize-start < stepLen {
+			readLen = oSize - start
+		}
+
+		doo := &types.DownloadObjectOptions{
+			Start:  start,
+			Length: readLen,
+		}
+
+		data, err := napi.GetObject(ctx, bucketName, objectName, doo)
+		if err != nil {
+			return err
+		}
+
+		h.Write(data)
+		writer.Write(data)
+
+		start += readLen
+	}
+
+	var etagb []byte
+	if len(objInfo.ETag) == md5.Size {
+		etagb = h.Sum(nil)
+	} else {
+		mhtag, err := mh.Encode(h.Sum(nil), mh.SHA2_256)
+		if err != nil {
+			return err
+		}
+
+		cidEtag := cid.NewCidV1(cid.Raw, mhtag)
+		etagb = cidEtag.Bytes()
+	}
+
+	gotEtag, err := etag.ToString(etagb)
+	if err != nil {
+		return err
+	}
+
+	origEtag, err := etag.ToString(objInfo.ETag)
+	if err != nil {
+		return err
+	}
+
+	if !bytes.Equal(etagb, objInfo.ETag) {
+		return xerrors.Errorf("object content wrong, expect %s got %s", origEtag, gotEtag)
+	}
+
+	return nil
 }
 
 func (m *MemoFs) GetObjectInfo(ctx context.Context, bucket, object string) (objInfo *mtypes.ObjectInfo, err error) {
@@ -123,7 +197,7 @@ func (m *MemoFs) PutObject(ctx context.Context, bucket, object string, r io.Read
 	}
 	defer closer()
 
-	poo := mtypes.DefaultUploadOption()
+	poo := mtypes.CidUploadOption()
 	poo.UserDefined = UserDefined
 	moi, err := napi.PutObject(ctx, bucket, object, r, poo)
 	if err != nil {
@@ -131,6 +205,5 @@ func (m *MemoFs) PutObject(ctx context.Context, bucket, object string, r io.Read
 	}
 	return moi, nil
 }
-
 
 // func (m *MemoFs) DeleteObject()
