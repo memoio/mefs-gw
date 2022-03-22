@@ -24,7 +24,7 @@ import (
 	"golang.org/x/crypto/blake2b"
 
 	"github.com/minio/minio-go/v7/pkg/s3utils"
-	minio "github.com/minio/minio/cmd"
+	minio "github.com/memoio/minio/cmd"
 	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/syndtr/goleveldb/leveldb/util"
 )
