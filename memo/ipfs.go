@@ -4,8 +4,15 @@ import (
 	"io"
 	"io/ioutil"
 
-	shell "github.com/ipfs/go-ipfs-api"
+	shapi "github.com/ipfs/go-ipfs-api"
 )
+
+func ChunkerSize(size string) shapi.AddOpts {
+	return func(rb *shapi.RequestBuilder) error {
+		rb.Option("chunker", size)
+		return nil
+	}
+}
 
 type IpFs struct {
 	host string
@@ -18,9 +25,10 @@ func NewIpfsClient(ip, port string) *IpFs {
 }
 
 func (i *IpFs) Putobject(r io.Reader) (string, error) {
-	sh := shell.NewShell(i.host)
-
-	hash, err := sh.Add(r)
+	sh := shapi.NewShell(i.host)
+	cidvereion := shapi.CidVersion(1)
+	chunkersize := ChunkerSize("size-253952")
+	hash, err := sh.Add(r, cidvereion, chunkersize)
 	if err != nil {
 		return "", err
 	}
@@ -28,7 +36,7 @@ func (i *IpFs) Putobject(r io.Reader) (string, error) {
 }
 
 func (i *IpFs) GetObject(cid string) ([]byte, error) {
-	sh := shell.NewShell(i.host)
+	sh := shapi.NewShell(i.host)
 	r, err := sh.Cat(cid)
 	if err != nil {
 		return nil, err
