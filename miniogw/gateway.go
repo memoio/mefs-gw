@@ -399,7 +399,6 @@ func (l *lfsGateway) ListBuckets(ctx context.Context) (bs []minio.BucketInfo, er
 	bs = make([]minio.BucketInfo, 0, 1)
 
 	if l.useMemo {
-
 		buckets, err := l.memofs.ListBuckets(ctx)
 		if err != nil {
 			return bs, err
@@ -447,14 +446,18 @@ func (l *lfsGateway) DeleteBucket(ctx context.Context, bucket string, opts minio
 // ListObjects lists all blobs in LFS bucket filtered by prefix.
 func (l *lfsGateway) ListObjects(ctx context.Context, bucket, prefix, marker, delimiter string, maxKeys int) (loi minio.ListObjectsInfo, err error) {
 
-	// if delimiter == SlashSeparator && prefix == SlashSeparator {
-	// 	return loi, nil
-	// }
+	if delimiter == SlashSeparator && prefix == SlashSeparator {
+		return loi, nil
+	}
 
-	// if maxKeys == 0 {
-	// 	return loi, nil
-	// }
+	if maxKeys == 0 {
+		return loi, nil
+	}
 	// fmt.Println("bucket: ", bucket, " prefix: ", prefix, " marker: ", marker, " delimiter: ", delimiter, " maxKeys: ", maxKeys)
+	// recursive := true
+	// if delimiter == SlashSeparator {
+	// 	recursive = false
+	// }
 
 	if l.useMemo {
 
@@ -464,10 +467,18 @@ func (l *lfsGateway) ListObjects(ctx context.Context, bucket, prefix, marker, de
 		}
 		ud := make(map[string]string)
 		ud["x-amz-meta-mode"] = "33204"
+		loi.Prefixes = []string{"work"}
 		for _, oi := range mloi {
 			etag, _ := metag.ToString(oi.ETag)
 			fmt.Println(oi.GetName())
 			ud["x-amz-meta-mtime"] = strconv.FormatInt(oi.GetTime(), 10)
+
+			// if strings.Contains(objname, SlashSeparator) {
+			// 	// obj := strings.Split(objname, "/")
+			// 	// for _, o := range obj {
+
+			// 	// }
+			// }
 			loi.Objects = append(loi.Objects, minio.ObjectInfo{
 				Bucket:      bucket,
 				Name:        oi.GetName(),
@@ -525,7 +536,7 @@ func (l *lfsGateway) ListObjectsV2(ctx context.Context, bucket, prefix, continua
 
 	if l.useS3 {
 		result, err := l.Client.ListObjectsV2(bucket, prefix, startAfter, continuationToken, delimiter, maxKeys)
-		fmt.Println("result", result.CommonPrefixes)
+		// fmt.Println("result", result.CommonPrefixes)
 		if err != nil {
 			return loiv2, minio.ErrorRespToObjectError(err, bucket)
 		}
@@ -538,10 +549,6 @@ func (l *lfsGateway) ListObjectsV2(ctx context.Context, bucket, prefix, continua
 
 // GetObjectNInfo - returns object info and locked object ReadCloser
 func (l *lfsGateway) GetObjectNInfo(ctx context.Context, bucket, object string, rs *minio.HTTPRangeSpec, h http.Header, lockType minio.LockType, opts minio.ObjectOptions) (gr *minio.GetObjectReader, err error) {
-	// if bucket != BucketName {
-	// 	return nil, minio.BucketNotFound{Bucket: bucket}
-	// }
-	// log.Println("GetObjectNInfo ", object)
 	var objInfo minio.ObjectInfo
 	objInfo, err = l.GetObjectInfo(ctx, bucket, object, opts)
 	if err != nil {
@@ -779,6 +786,7 @@ func (l *lfsGateway) PutObject(ctx context.Context, bucket, object string, r *mi
 	}
 
 	if l.useS3 && l.useMemo {
+		qBucketname := viper.GetString("common.bucketname")
 		moi, err := l.memofs.PutObject(ctx, bucket, object, reader, opts.UserDefined)
 		if err != nil {
 			return objInfo, err
@@ -790,7 +798,7 @@ func (l *lfsGateway) PutObject(ctx context.Context, bucket, object string, r *mi
 			Key:      object,
 			Metadata: minio.ToMinioClientObjectInfoMetadata(opts.UserDefined),
 		}
-		go l.Client.PutObject(ctx, bucket, object, reader, data.Size(), data.MD5Base64String(), data.SHA256HexString(), putOpts)
+		go l.Client.PutObject(ctx, qBucketname, object, reader, data.Size(), data.MD5Base64String(), data.SHA256HexString(), putOpts)
 		l.addUsedBytes(limitedReader.ReadedBytes())
 		return minio.FromMinioClientObjectInfo(bucket, oi), nil
 	}
