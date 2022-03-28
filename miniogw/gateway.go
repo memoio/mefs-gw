@@ -467,7 +467,7 @@ func (l *lfsGateway) ListObjects(ctx context.Context, bucket, prefix, marker, de
 		}
 		ud := make(map[string]string)
 		ud["x-amz-meta-mode"] = "33204"
-		loi.Prefixes = []string{"work"}
+// 		loi.Prefixes = []string{"work"}
 		for _, oi := range mloi {
 			etag, _ := metag.ToString(oi.ETag)
 			fmt.Println(oi.GetName())
