@@ -29,6 +29,8 @@ import (
 	"github.com/memoio/mefs-gateway/utils"
 )
 
+const SlashSeparator = "/"
+
 // Start gateway
 func Start(addr, pwd, endPoint, consoleAddress string) error {
 	minio.RegisterGatewayCommand(cli.Command{
@@ -394,7 +396,6 @@ func (l *lfsGateway) GetBucketInfo(ctx context.Context, bucket string) (bi minio
 
 // ListBuckets lists all LFS buckets.
 func (l *lfsGateway) ListBuckets(ctx context.Context) (bs []minio.BucketInfo, err error) {
-	// log.Println("ListObjects ")
 	bs = make([]minio.BucketInfo, 0, 1)
 
 	if l.useMemo {
@@ -445,13 +446,18 @@ func (l *lfsGateway) DeleteBucket(ctx context.Context, bucket string, opts minio
 
 // ListObjects lists all blobs in LFS bucket filtered by prefix.
 func (l *lfsGateway) ListObjects(ctx context.Context, bucket, prefix, marker, delimiter string, maxKeys int) (loi minio.ListObjectsInfo, err error) {
-	// if bucket != BucketName {
-	// 	return loi, minio.BucketNotFound{Bucket: bucket}
+
+	// if delimiter == SlashSeparator && prefix == SlashSeparator {
+	// 	return loi, nil
 	// }
-	// log.Println("ListObjects ", bucket)
+
+	// if maxKeys == 0 {
+	// 	return loi, nil
+	// }
+	// fmt.Println("bucket: ", bucket, " prefix: ", prefix, " marker: ", marker, " delimiter: ", delimiter, " maxKeys: ", maxKeys)
 
 	if l.useMemo {
-		// log.Println("ListObjects prefix", prefix)
+
 		mloi, err := l.memofs.ListObjects(ctx, bucket)
 		if err != nil {
 			return loi, err
@@ -460,6 +466,7 @@ func (l *lfsGateway) ListObjects(ctx context.Context, bucket, prefix, marker, de
 		ud["x-amz-meta-mode"] = "33204"
 		for _, oi := range mloi {
 			etag, _ := metag.ToString(oi.ETag)
+			fmt.Println(oi.GetName())
 			ud["x-amz-meta-mtime"] = strconv.FormatInt(oi.GetTime(), 10)
 			loi.Objects = append(loi.Objects, minio.ObjectInfo{
 				Bucket:      bucket,
@@ -518,6 +525,7 @@ func (l *lfsGateway) ListObjectsV2(ctx context.Context, bucket, prefix, continua
 
 	if l.useS3 {
 		result, err := l.Client.ListObjectsV2(bucket, prefix, startAfter, continuationToken, delimiter, maxKeys)
+		fmt.Println("result", result.CommonPrefixes)
 		if err != nil {
 			return loiv2, minio.ErrorRespToObjectError(err, bucket)
 		}
@@ -782,7 +790,7 @@ func (l *lfsGateway) PutObject(ctx context.Context, bucket, object string, r *mi
 			Key:      object,
 			Metadata: minio.ToMinioClientObjectInfoMetadata(opts.UserDefined),
 		}
-
+		go l.Client.PutObject(ctx, bucket, object, reader, data.Size(), data.MD5Base64String(), data.SHA256HexString(), putOpts)
 		l.addUsedBytes(limitedReader.ReadedBytes())
 		return minio.FromMinioClientObjectInfo(bucket, oi), nil
 	}
@@ -799,7 +807,6 @@ func (l *lfsGateway) PutObject(ctx context.Context, bucket, object string, r *mi
 			Key:      object,
 			Metadata: minio.ToMinioClientObjectInfoMetadata(opts.UserDefined),
 		}
-		go l.Client.PutObject(ctx, bucket, object, reader, data.Size(), data.MD5Base64String(), data.SHA256HexString(), putOpts)
 		l.addUsedBytes(limitedReader.ReadedBytes())
 		return minio.FromMinioClientObjectInfo(bucket, oi), nil
 	}
