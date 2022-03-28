@@ -1,7 +1,8 @@
 [common]
 use_local = false
-use_s3 = true
+use_s3 = false
 use_memo = true
+use_ipfs = false
 read_only = false
 repo_dir = "/home/lighthouse/mpath"
 max_upload_bytes = 1099511627776 # 1TiB
