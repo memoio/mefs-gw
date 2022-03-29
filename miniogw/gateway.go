@@ -615,7 +615,7 @@ func (l *lfsGateway) GetObject(ctx context.Context, bucketName, objectName strin
 	}
 
 	if l.useS3 && l.useMemo {
-		err := l.memofs.GetObject(ctx, bucketName, objectName, writer)
+		err := l.memofs.GetObject(ctx, bucketName, objectName, startOffset, length, writer)
 		if err != nil {
 			opts := miniogo.GetObjectOptions{}
 			opts.ServerSideEncryption = o.ServerSideEncryption
@@ -670,7 +670,7 @@ func (l *lfsGateway) GetObject(ctx context.Context, bucketName, objectName strin
 	}
 
 	if l.useMemo {
-		err := l.memofs.GetObject(ctx, bucketName, objectName, writer)
+		err := l.memofs.GetObject(ctx, bucketName, objectName, startOffset, length, writer)
 		if err != nil {
 			return err
 		}
