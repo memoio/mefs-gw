@@ -1,11 +1,14 @@
 package miniogw
 
 import (
+	"bytes"
 	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
 	"io"
+	"io/ioutil"
+	"log"
 	"net/http"
 	"os"
 	"path"
@@ -445,7 +448,6 @@ func (l *lfsGateway) DeleteBucket(ctx context.Context, bucket string, opts minio
 
 // ListObjects lists all blobs in LFS bucket filtered by prefix.
 func (l *lfsGateway) ListObjects(ctx context.Context, bucket, prefix, marker, delimiter string, maxKeys int) (loi minio.ListObjectsInfo, err error) {
-
 	if delimiter == SlashSeparator && prefix == SlashSeparator {
 		return loi, nil
 	}
@@ -453,42 +455,30 @@ func (l *lfsGateway) ListObjects(ctx context.Context, bucket, prefix, marker, de
 	if maxKeys == 0 {
 		return loi, nil
 	}
-	// fmt.Println("bucket: ", bucket, " prefix: ", prefix, " marker: ", marker, " delimiter: ", delimiter, " maxKeys: ", maxKeys)
-	// recursive := true
-	// if delimiter == SlashSeparator {
-	// 	recursive = false
-	// }
 
 	if l.useMemo {
-
-		mloi, err := l.memofs.ListObjects(ctx, bucket)
+		mloi, err := l.memofs.ListObjects(ctx, bucket, prefix, marker, delimiter, maxKeys)
 		if err != nil {
 			return loi, err
 		}
 		ud := make(map[string]string)
 		ud["x-amz-meta-mode"] = "33204"
-		// loi.Prefixes = []string{"work"}
-		for _, oi := range mloi {
+		for _, oi := range mloi.Objects {
 			etag, _ := metag.ToString(oi.ETag)
-			fmt.Println(oi.GetName())
 			ud["x-amz-meta-mtime"] = strconv.FormatInt(oi.GetTime(), 10)
-
-			// if strings.Contains(objname, SlashSeparator) {
-			// 	// obj := strings.Split(objname, "/")
-			// 	// for _, o := range obj {
-
-			// 	// }
-			// }
 			loi.Objects = append(loi.Objects, minio.ObjectInfo{
 				Bucket:      bucket,
 				Name:        oi.GetName(),
 				ModTime:     time.Unix(oi.GetTime(), 0).UTC(),
 				Size:        int64(oi.Size),
-				IsDir:       false,
 				ETag:        etag,
 				UserDefined: ud,
 			})
 		}
+
+		loi.IsTruncated = mloi.IsTruncated
+		loi.NextMarker = mloi.NextMarker
+		loi.Prefixes = mloi.Prefixes
 
 		return loi, nil
 	}
@@ -731,12 +721,19 @@ func (l *lfsGateway) GetObjectInfo(ctx context.Context, bucket, object string, o
 	return l.localfs.GetObjectInfo(bucket, object)
 }
 
+// spilt reader to qiniu and memo
+func readerSpilt(reader io.Reader, reader1, reader2 *bytes.Buffer) error {
+	b, err := ioutil.ReadAll(reader)
+	if err != nil {
+		log.Println("readerspilt err: ", err)
+	}
+	reader1.Write(b)
+	reader2.Write(b)
+	return err
+}
+
 // PutObject creates a new object with the incoming data.
 func (l *lfsGateway) PutObject(ctx context.Context, bucket, object string, r *minio.PutObjReader, opts minio.ObjectOptions) (objInfo minio.ObjectInfo, err error) {
-	// if bucket != BucketName {
-	// 	return objInfo, minio.BucketNotFound{Bucket: bucket}
-	// }
-	// log.Println("PutObject ", object)
 	if l.readOnly {
 		return objInfo, minio.PrefixAccessDenied{Bucket: bucket}
 	}
@@ -786,8 +783,19 @@ func (l *lfsGateway) PutObject(ctx context.Context, bucket, object string, r *mi
 	}
 
 	if l.useS3 && l.useMemo {
-		qBucketname := viper.GetString("common.bucketname")
-		moi, err := l.memofs.PutObject(ctx, bucket, object, reader, opts.UserDefined)
+		reader1 := new(bytes.Buffer)
+		reader2 := new(bytes.Buffer)
+		err = readerSpilt(reader, reader1, reader2)
+		if err != nil {
+			return objInfo, err
+		}
+		hashReader, err := minio.NewhashReader(reader1, data.Size(), "", "", data.Size())
+		if err != nil {
+			return objInfo, err
+		}
+		rawReader := hashReader
+		pReader := minio.NewPutObjReader(rawReader)
+		moi, err := l.memofs.PutObject(ctx, bucket, object, reader2, opts.UserDefined)
 		if err != nil {
 			return objInfo, err
 		}
@@ -798,7 +806,17 @@ func (l *lfsGateway) PutObject(ctx context.Context, bucket, object string, r *mi
 			Key:      object,
 			Metadata: minio.ToMinioClientObjectInfoMetadata(opts.UserDefined),
 		}
-		go l.Client.PutObject(ctx, qBucketname, object, reader, data.Size(), data.MD5Base64String(), data.SHA256HexString(), putOpts)
+
+		go func(pr *minio.PutObjReader, size int64) {
+			qBucketname := viper.GetString("common.bucketname")
+			_, err := l.Client.PutObject(context.TODO(), qBucketname, object, pReader, size, "", "", putOpts)
+			if err != nil {
+				log.Println("put object error:", err)
+			} else {
+				log.Println("Success!")
+			}
+		}(pReader, data.Size())
+
 		l.addUsedBytes(limitedReader.ReadedBytes())
 		return minio.FromMinioClientObjectInfo(bucket, oi), nil
 	}
