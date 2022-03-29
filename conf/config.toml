@@ -1,6 +1,6 @@
 [common]
 use_local = false
-use_s3 = false
+use_s3 = true
 use_memo = true
 use_ipfs = false
 read_only = false

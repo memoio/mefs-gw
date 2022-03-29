@@ -4,7 +4,6 @@ go 1.16
 
 require (
 	github.com/ipfs/go-blockservice v0.2.1
-	github.com/ipfs/go-cid v0.1.0
 	github.com/ipfs/go-datastore v0.5.1
 	github.com/ipfs/go-ipfs-api v0.3.0
 	github.com/ipfs/go-ipfs-blockstore v1.1.2
@@ -14,12 +13,11 @@ require (
 	github.com/ipfs/go-merkledag v0.5.1
 	github.com/ipfs/go-unixfs v0.3.1
 	github.com/memoio/go-mefs-v2 v0.0.0-00010101000000-000000000000
-	github.com/memoio/minio v0.2.0
+	github.com/memoio/minio v0.2.2
 	github.com/minio/cli v1.22.0
 	github.com/minio/madmin-go v1.3.6
 	github.com/minio/minio-go/v7 v7.0.23
 	github.com/mitchellh/go-homedir v1.1.0
-	github.com/multiformats/go-multihash v0.0.15
 	github.com/spf13/cobra v1.3.0
 	github.com/spf13/viper v1.10.1
 	github.com/syndtr/goleveldb v1.0.1-0.20210819022825-2ae1ddf74ef7
