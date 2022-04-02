@@ -221,7 +221,10 @@ func (m *MemoFs) PutObject(ctx context.Context, bucket, object string, r io.Read
 	defer closer()
 
 	poo := mtypes.CidUploadOption()
-	poo.UserDefined = UserDefined
+	for k, v := range UserDefined {
+		poo.UserDefined[k] = v
+	}
+
 	moi, err := napi.PutObject(ctx, bucket, object, r, poo)
 	if err != nil {
 		return objInfo, err
