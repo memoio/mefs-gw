@@ -18,9 +18,9 @@ type IpFs struct {
 	host string
 }
 
-func NewIpfsClient(ip, port string) *IpFs {
+func NewIpfsClient(host string) *IpFs {
 	return &IpFs{
-		host: ip + ":" + port,
+		host: host,
 	}
 }
 
