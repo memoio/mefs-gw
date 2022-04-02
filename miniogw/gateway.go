@@ -580,11 +580,7 @@ func (e InvalidRange) Error() string {
 // startOffset indicates the starting read location of the object.
 // length indicates the total length of the object.
 func (l *lfsGateway) GetObject(ctx context.Context, bucketName, objectName string, startOffset, length int64, writer io.Writer, etag string, o minio.ObjectOptions) error {
-	if l.readOnly {
-		return minio.NotImplemented{}
-	}
-
-	if length < 0 && length != -1 {
+    if length < 0 && length != -1 {
 		return minio.ErrorRespToObjectError(minio.InvalidRange{}, bucketName, objectName)
 	}
 
