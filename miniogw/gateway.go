@@ -580,7 +580,7 @@ func (e InvalidRange) Error() string {
 // startOffset indicates the starting read location of the object.
 // length indicates the total length of the object.
 func (l *lfsGateway) GetObject(ctx context.Context, bucketName, objectName string, startOffset, length int64, writer io.Writer, etag string, o minio.ObjectOptions) error {
-    if length < 0 && length != -1 {
+	if length < 0 && length != -1 {
 		return minio.ErrorRespToObjectError(minio.InvalidRange{}, bucketName, objectName)
 	}
 
@@ -993,11 +993,9 @@ func (l *lfsGateway) IsCompressionSupported() bool {
 func (l *lfsGateway) StatObject(ctx context.Context, bucket, object string, opts minio.ObjectOptions) (minio.ObjectInfo, error) {
 
 	if l.useS3 {
-		if bucket != BucketName {
-			return minio.ObjectInfo{}, minio.BucketNotFound{Bucket: bucket}
-		}
+		qBucketname := viper.GetString("common.bucketname")
 
-		oi, err := l.Client.StatObject(ctx, bucket, object, miniogo.StatObjectOptions{
+		oi, err := l.Client.StatObject(ctx, qBucketname, object, miniogo.StatObjectOptions{
 			ServerSideEncryption: opts.ServerSideEncryption,
 		})
 
