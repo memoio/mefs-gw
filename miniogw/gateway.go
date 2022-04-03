@@ -687,15 +687,23 @@ func (l *lfsGateway) GetObjectInfo(ctx context.Context, bucket, object string, o
 		if err != nil {
 			return objInfo, err
 		}
+		qoi, err := l.Client.StatObject(ctx, bucket, object, miniogo.StatObjectOptions{
+			ServerSideEncryption: opts.ServerSideEncryption,
+		})
+
+		if err != nil {
+			return minio.ObjectInfo{}, minio.ErrorRespToObjectError(err, bucket, object)
+		}
 		ud := make(map[string]string)
 		ud["x-amz-meta-mode"] = "33204"
 		ud["x-amz-meta-mtime"] = strconv.FormatInt(moi.GetTime(), 10)
 		// need handle ETag
 		etag, _ := metag.ToString(moi.ETag)
 		oi := miniogo.ObjectInfo{
-			Key:  moi.Name,
-			ETag: etag,
-			Size: int64(moi.Size),
+			Key:      moi.Name,
+			ETag:     etag,
+			Size:     int64(moi.Size),
+			Metadata: qoi.Metadata,
 		}
 		// log.Println("ETag ", hex.EncodeToString(moi.Etag))
 		// log.Println("objectinfo ", minio.FromMinioClientObjectInfo(bucket, oi))
