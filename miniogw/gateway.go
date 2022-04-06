@@ -89,10 +89,11 @@ func (g *Mefs) newS3Client(creds madmin.Credentials, transport http.RoundTripper
 	region := viper.GetString("s3.region")
 	accessKey := viper.GetString("s3.accesskey")
 	secretKey := viper.GetString("s3.secretkey")
+	useSsl := viper.GetBool("s3.use_ssl")
 
 	optionsStaticCreds := &miniogo.Options{
 		Creds:        credentials.NewStaticV4(accessKey, secretKey, ""),
-		Secure:       false,
+		Secure:       useSsl,
 		Region:       region,
 		BucketLookup: miniogo.BucketLookupAuto,
 		Transport:    transport,
@@ -677,19 +678,14 @@ func (l *lfsGateway) GetObject(ctx context.Context, bucketName, objectName strin
 
 // GetObjectInfo reads object info and replies back ObjectInfo.
 func (l *lfsGateway) GetObjectInfo(ctx context.Context, bucket, object string, opts minio.ObjectOptions) (objInfo minio.ObjectInfo, err error) {
-	// if bucket != BucketName {
-	// 	return objInfo, minio.BucketNotFound{Bucket: bucket}
-	// }
-	// log.Println("GetObjectInfo ", object)
-
 	if l.useMemo {
 		moi, err := l.memofs.GetObjectInfo(ctx, bucket, object)
 		if err != nil {
 			return objInfo, err
 		}
-		qoi, err := l.Client.StatObject(ctx, bucket, object, miniogo.StatObjectOptions{
-			ServerSideEncryption: opts.ServerSideEncryption,
-		})
+		// qoi, err := l.Client.StatObject(ctx, bucket, object, miniogo.StatObjectOptions{
+		// 	ServerSideEncryption: opts.ServerSideEncryption,
+		// })
 
 		if err != nil {
 			return minio.ObjectInfo{}, minio.ErrorRespToObjectError(err, bucket, object)
@@ -703,7 +699,7 @@ func (l *lfsGateway) GetObjectInfo(ctx context.Context, bucket, object string, o
 			Key:      moi.Name,
 			ETag:     etag,
 			Size:     int64(moi.Size),
-			Metadata: qoi.Metadata,
+			Metadata: minio.ToMinioClientObjectInfoMetadata(moi.UserDefined),
 		}
 		// log.Println("ETag ", hex.EncodeToString(moi.Etag))
 		// log.Println("objectinfo ", minio.FromMinioClientObjectInfo(bucket, oi))
