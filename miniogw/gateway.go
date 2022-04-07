@@ -23,6 +23,8 @@ import (
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/minio/minio-go/v7/pkg/s3utils"
 	"github.com/minio/minio-go/v7/pkg/tags"
+	"github.com/minio/pkg/bucket/policy"
+	"github.com/minio/pkg/bucket/policy/condition"
 	"github.com/spf13/viper"
 	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/syndtr/goleveldb/leveldb/opt"
@@ -153,6 +155,7 @@ func (g *Mefs) NewGatewayLayer(creds madmin.Credentials) (minio.ObjectLayer, err
 
 	gw := &lfsGateway{
 		rootpath: rootpath,
+		polices:  make(map[string]*policy.Policy),
 		db:       db,
 	}
 
@@ -239,6 +242,11 @@ func (g *Mefs) NewGatewayLayer(creds madmin.Credentials) (minio.ObjectLayer, err
 		}
 	}
 
+	if gw.useIpfs {
+		host := viper.GetString("common.ipfs_host")
+		gw.ipfs = memo.NewIpfsClient(host)
+	}
+
 	// 读取已使用的空间大小
 	err = gw.readUsedBytes()
 	if err != nil {
@@ -263,6 +271,7 @@ type lfsGateway struct {
 	useS3    bool
 	useLocal bool
 	useMemo  bool
+	useIpfs  bool
 
 	readOnly bool
 	repoDir  string
@@ -272,6 +281,8 @@ type lfsGateway struct {
 	memofs  *memo.MemoFs
 	localfs *utils.LocalFS
 	Client  *miniogo.Core
+	ipfs    *memo.IpFs
+	polices map[string]*policy.Policy
 	db      *leveldb.DB
 }
 
@@ -317,6 +328,53 @@ func (l *lfsGateway) Shutdown(ctx context.Context) error {
 	return nil
 }
 
+// SetBucketPolicy will set policy on bucket.
+func (l *lfsGateway) SetBucketPolicy(ctx context.Context, bucket string, bucketPolicy *policy.Policy) error {
+	_, err := l.GetBucketInfo(ctx, bucket)
+	if err != nil {
+		return err
+	}
+	l.polices[bucket] = bucketPolicy
+	return nil
+}
+
+// GetBucketPolicy will get policy on bucket.
+func (l *lfsGateway) GetBucketPolicy(ctx context.Context, bucket string) (*policy.Policy, error) {
+	bi, err := l.memofs.GetBucketInfo(ctx, bucket)
+	if err != nil {
+		return nil, err
+	}
+
+	pb, ok := l.polices[bucket]
+	if ok {
+		return pb, nil
+	}
+
+	pp := &policy.Policy{
+		ID:      policy.ID(fmt.Sprintf("data: %d, parity: %d", bi.DataCount, bi.ParityCount)),
+		Version: policy.DefaultVersion,
+		Statements: []policy.Statement{
+			policy.NewStatement(
+				"",
+				policy.Allow,
+
+				policy.NewPrincipal("*"),
+				policy.NewActionSet(
+					policy.GetObjectAction,
+					//policy.ListBucketAction,
+				),
+				policy.NewResourceSet(
+					policy.NewResource(bucket, ""),
+					policy.NewResource(bucket, "*"),
+				),
+				condition.NewFunctions(),
+			),
+		},
+	}
+
+	return pp, nil
+}
+
 // StorageInfo is not relevant to LFS backend.
 func (l *lfsGateway) StorageInfo(ctx context.Context) (si minio.StorageInfo, errs []error) {
 	si.Backend.Type = madmin.Gateway
@@ -348,6 +406,10 @@ func (l *lfsGateway) MakeBucketWithLocation(ctx context.Context, bucket string, 
 
 // GetBucketInfo gets bucket metadata.
 func (l *lfsGateway) GetBucketInfo(ctx context.Context, bucket string) (bi minio.BucketInfo, err error) {
+	if l.useIpfs {
+		bi.Name = "nft"
+		return bi, nil
+	}
 
 	if l.useMemo {
 		bucketInfo, err := l.memofs.GetBucketInfo(ctx, bucket)
@@ -584,7 +646,9 @@ func (l *lfsGateway) GetObject(ctx context.Context, bucketName, objectName strin
 	if length < 0 && length != -1 {
 		return minio.ErrorRespToObjectError(minio.InvalidRange{}, bucketName, objectName)
 	}
-
+	if l.useIpfs {
+		bucketName = ""
+	}
 	qBucketname := viper.GetString("common.bucketname")
 
 	if l.useLocal {
@@ -611,32 +675,43 @@ func (l *lfsGateway) GetObject(ctx context.Context, bucketName, objectName strin
 		}
 	}
 
-	if l.useS3 && l.useMemo {
+	if l.useMemo {
 		err := l.memofs.GetObject(ctx, bucketName, objectName, startOffset, length, writer)
 		if err != nil {
-			opts := miniogo.GetObjectOptions{}
-			opts.ServerSideEncryption = o.ServerSideEncryption
+			if l.useS3 {
+				opts := miniogo.GetObjectOptions{}
+				opts.ServerSideEncryption = o.ServerSideEncryption
 
-			if startOffset >= 0 && length >= 0 {
-				if err := opts.SetRange(startOffset, startOffset+length-1); err != nil {
+				if startOffset >= 0 && length >= 0 {
+					if err := opts.SetRange(startOffset, startOffset+length-1); err != nil {
+						return minio.ErrorRespToObjectError(err, bucketName, objectName)
+					}
+				}
+
+				if etag != "" {
+					opts.SetMatchETag(etag)
+				}
+
+				object, _, _, err := l.Client.GetObject(ctx, qBucketname, objectName, opts)
+				if err != nil {
 					return minio.ErrorRespToObjectError(err, bucketName, objectName)
 				}
-			}
+				defer object.Close()
+				if _, err := io.Copy(writer, object); err != nil {
+					return minio.ErrorRespToObjectError(err, bucketName, objectName)
+				}
 
-			if etag != "" {
-				opts.SetMatchETag(etag)
+				return nil
 			}
-
-			object, _, _, err := l.Client.GetObject(ctx, qBucketname, objectName, opts)
-			if err != nil {
-				return minio.ErrorRespToObjectError(err, bucketName, objectName)
+			if l.useIpfs {
+				data, err := l.ipfs.GetObject(objectName)
+				if err != nil {
+					return err
+				}
+				writer.Write(data)
+				return nil
 			}
-			defer object.Close()
-			if _, err := io.Copy(writer, object); err != nil {
-				return minio.ErrorRespToObjectError(err, bucketName, objectName)
-			}
-
-			return nil
+			return err
 		}
 		return nil
 	}
@@ -666,18 +741,17 @@ func (l *lfsGateway) GetObject(ctx context.Context, bucketName, objectName strin
 		return nil
 	}
 
-	if l.useMemo {
-		err := l.memofs.GetObject(ctx, bucketName, objectName, startOffset, length, writer)
-		if err != nil {
-			return err
-		}
-		return nil
-	}
 	return nil
 }
 
 // GetObjectInfo reads object info and replies back ObjectInfo.
 func (l *lfsGateway) GetObjectInfo(ctx context.Context, bucket, object string, opts minio.ObjectOptions) (objInfo minio.ObjectInfo, err error) {
+	if l.useIpfs {
+		objInfo.Size = -1
+		objInfo.Bucket = "nft"
+		return objInfo, nil
+	}
+
 	if l.useMemo {
 		moi, err := l.memofs.GetObjectInfo(ctx, bucket, object)
 		if err != nil {
@@ -822,6 +896,37 @@ func (l *lfsGateway) PutObject(ctx context.Context, bucket, object string, r *mi
 		return minio.FromMinioClientObjectInfo(bucket, oi), nil
 	}
 
+	if l.useIpfs && l.useMemo {
+		reader1 := new(bytes.Buffer)
+		reader2 := new(bytes.Buffer)
+		err = readerSpilt(reader, reader1, reader2)
+		if err != nil {
+			return objInfo, err
+		}
+		moi, err := l.memofs.PutObject(ctx, bucket, object, reader2, opts.UserDefined)
+		if err != nil {
+			return objInfo, err
+		}
+		etag, _ := metag.ToString(moi.ETag)
+		oi = miniogo.ObjectInfo{
+			ETag:     etag,
+			Size:     int64(moi.Size),
+			Key:      object,
+			Metadata: minio.ToMinioClientObjectInfoMetadata(opts.UserDefined),
+		}
+
+		go func(reader io.Reader) {
+			_, err := l.ipfs.Putobject(reader)
+			if err != nil {
+				log.Println("put object error:", err)
+			} else {
+				log.Println("Success!")
+			}
+		}(reader1)
+
+		l.addUsedBytes(limitedReader.ReadedBytes())
+		return minio.FromMinioClientObjectInfo(bucket, oi), nil
+	}
 	if l.useMemo {
 		moi, err := l.memofs.PutObject(ctx, bucket, object, reader, opts.UserDefined)
 		if err != nil {
@@ -950,45 +1055,6 @@ func (l *lfsGateway) DeleteObjects(ctx context.Context, bucket string, objects [
 
 	return dobjects, errs
 }
-
-// // SetBucketPolicy sets policy on bucket.
-// // LFS supports three types of bucket policies:
-// // oss.ACLPublicReadWrite: readwrite in minio terminology
-// // oss.ACLPublicRead: readonly in minio terminology
-// // oss.ACLPrivate: none in minio terminology
-// func (l *lfsGateway) SetBucketPolicy(ctx context.Context, bucket string, bucketPolicy *policy.Policy) error {
-// 	data, err := json.Marshal(bucketPolicy)
-// 	if err != nil {
-// 		// This should not happen.
-
-// 		return minio.ErrorRespToObjectError(err, bucket)
-// 	}
-
-// 	if err := l.Client.SetBucketPolicy(ctx, bucket, string(data)); err != nil {
-// 		return minio.ErrorRespToObjectError(err, bucket)
-// 	}
-
-// 	return nil
-// }
-
-// // GetBucketPolicy will get policy on bucket.
-// func (l *lfsGateway) GetBucketPolicy(ctx context.Context, bucket string) (*policy.Policy, error) {
-// 	data, err := l.Client.GetBucketPolicy(ctx, bucket)
-// 	if err != nil {
-// 		return nil, minio.ErrorRespToObjectError(err, bucket)
-// 	}
-
-// 	bucketPolicy, err := policy.ParseConfig(strings.NewReader(data), bucket)
-// 	return bucketPolicy, minio.ErrorRespToObjectError(err, bucket)
-// }
-
-// // DeleteBucketPolicy deletes all policies on bucket.
-// func (l *lfsGateway) DeleteBucketPolicy(ctx context.Context, bucket string) error {
-// 	if err := l.Client.SetBucketPolicy(ctx, bucket, ""); err != nil {
-// 		return minio.ErrorRespToObjectError(err, bucket, "")
-// 	}
-// 	return nil
-// }
 
 // IsCompressionSupported returns whether compression is applicable for this layer.
 func (l *lfsGateway) IsCompressionSupported() bool {
