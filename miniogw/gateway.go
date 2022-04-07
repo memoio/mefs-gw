@@ -683,7 +683,8 @@ func (l *lfsGateway) GetObjectInfo(ctx context.Context, bucket, object string, o
 		if err != nil {
 			return objInfo, err
 		}
-		// qoi, err := l.Client.StatObject(ctx, bucket, object, miniogo.StatObjectOptions{
+		// qbucketname := viper.GetString("common.bucketname")
+		// qoi, err := l.Client.StatObject(ctx, qbucketname, object, miniogo.StatObjectOptions{
 		// 	ServerSideEncryption: opts.ServerSideEncryption,
 		// })
 
