@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
@@ -21,10 +22,11 @@ import (
 	ipld "github.com/ipfs/go-ipld-format"
 	dag "github.com/ipfs/go-merkledag"
 	"github.com/ipfs/go-unixfs/importer"
+	"github.com/spf13/viper"
 	"golang.org/x/crypto/blake2b"
 
-	"github.com/minio/minio-go/v7/pkg/s3utils"
 	minio "github.com/memoio/minio/cmd"
+	"github.com/minio/minio-go/v7/pkg/s3utils"
 	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/syndtr/goleveldb/leveldb/util"
 )
@@ -84,6 +86,28 @@ type LocalFS struct {
 	rootDir    string             // 文件存储的根目录
 	tempMap    map[string]*Bucket // 在内存中存储bucket的信息
 	meta       *leveldb.DB        // 存储元数据
+}
+
+func UserLocalFS(rootpath, BucketName string) (*LocalFS, error) {
+	localDir := viper.GetString("common.local_dir")
+	if localDir == "" {
+		localDir = path.Join(rootpath, "local")
+	}
+	fmt.Println("Use local fs: ", localDir)
+	localfs, err := OpenLocalFS(localDir)
+	if err != nil {
+		return nil, err
+	}
+
+	err = localfs.CheckBucketExist(BucketName)
+	if err != nil {
+		err = localfs.MakeBucket(BucketName)
+		if err != nil {
+			return nil, err
+		}
+
+	}
+	return localfs, nil
 }
 
 func OpenLocalFS(rootDir string) (*LocalFS, error) {

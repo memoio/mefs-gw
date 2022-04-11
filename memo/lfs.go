@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log"
 	"net/http"
 	"time"
 
@@ -224,6 +225,7 @@ func (m *MemoFs) PutObject(ctx context.Context, bucket, object string, r io.Read
 	for k, v := range UserDefined {
 		poo.UserDefined[k] = v
 	}
+	log.Println(poo.UserDefined)
 
 	moi, err := napi.PutObject(ctx, bucket, object, r, poo)
 	if err != nil {
