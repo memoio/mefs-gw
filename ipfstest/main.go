@@ -49,7 +49,7 @@ func main() {
 	// 	if err != nil {
 	// 		fmt.Println("PutObject err:", err)
 	// 	}
-	// 	fmt.Println("Upload Info:", info)
+	// 	fmt.Println("cid Info:", info.ETag)
 	// }
 
 	// {

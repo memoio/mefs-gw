@@ -12,6 +12,8 @@
 [common]
 use_local = true
 use_s3 = false
+use_memo = true
+use_ipfs = false
 read_only = true
 max_upload_bytes = 1099511627776 # 1TiB
 bucketname = "mefstest" # set bucketname the gateway to use
@@ -25,6 +27,7 @@ endpoint = "s3-qos.my-sz-1.qiniu-solutions.com:29091"
 region = "z0"
 accesskey = "22taR9gKak3fXfDYT-GqSjxGc_uslfiNC0ocxPK_"
 secretkey = "VHr2Q1q3dRfZ7nXZPUnmRtlM0Wh_hDAWbzniSIlZ"
+use_ssl = true
 ```
 
 + `bucketname`为该实例的规定好的`BucketName`

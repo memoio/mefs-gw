@@ -179,6 +179,9 @@ func (g *Mefs) NewGatewayLayer(creds madmin.Credentials) (minio.ObjectLayer, err
 	if gw.useLocal {
 		logger.Debug("Use Local backend")
 		gw.localfs, err = utils.UserLocalFS(rootpath, BucketName)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// 是否需要连接上某个s3
@@ -635,9 +638,6 @@ func (l *lfsGateway) GetObject(ctx context.Context, bucketName, objectName strin
 	if length < 0 && length != -1 {
 		return minio.ErrorRespToObjectError(minio.InvalidRange{}, bucketName, objectName)
 	}
-	if l.useIpfs {
-		bucketName = ""
-	}
 
 	if l.useLocal {
 		object, size, err := l.localfs.GetObject(bucketName, objectName, startOffset)
@@ -664,7 +664,7 @@ func (l *lfsGateway) GetObject(ctx context.Context, bucketName, objectName strin
 	}
 
 	if l.useMemo {
-		err := l.memofs.GetObject(ctx, bucketName, objectName, startOffset, length, writer)
+		err := l.memofs.GetObject(ctx, bucketName, objectName, startOffset, length, writer, l.useIpfs)
 		if err != nil {
 			logger.Errorf("Memo get error:", err)
 			if l.useS3 {
@@ -1050,7 +1050,6 @@ func (l *lfsGateway) IsCompressionSupported() bool {
 }
 
 func (l *lfsGateway) StatObject(ctx context.Context, bucket, object string, opts minio.ObjectOptions) (minio.ObjectInfo, error) {
-
 	if l.useS3 {
 		qBucketname := viper.GetString("common.bucketname")
 

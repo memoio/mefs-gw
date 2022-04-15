@@ -106,7 +106,7 @@ func (m *MemoFs) ListObjects(ctx context.Context, bucket string, prefix, marker,
 	return mloi, nil
 }
 
-func (m *MemoFs) GetObject(ctx context.Context, bucketName, objectName string, startOffset, length int64, writer io.Writer) error {
+func (m *MemoFs) GetObject(ctx context.Context, bucketName, objectName string, startOffset, length int64, writer io.Writer, flag bool) error {
 	if bucketName == minioMetaBucket && objectName == dataUsageObjNamePath {
 		mtime := int64(0)
 		dui := minio.DataUsageInfo{
@@ -141,7 +141,9 @@ func (m *MemoFs) GetObject(ctx context.Context, bucketName, objectName string, s
 		writer.Write(res)
 		return nil
 	}
-
+	if flag {
+		bucketName = ""
+	}
 	napi, closer, err := mclient.NewUserNode(ctx, m.addr, m.headers)
 	if err != nil {
 		return err
