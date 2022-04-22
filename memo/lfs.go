@@ -6,6 +6,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"golang.org/x/xerrors"
@@ -29,7 +30,8 @@ type MemoFs struct {
 	headers http.Header
 }
 
-func NewMemofs(repoDir string) (*MemoFs, error) {
+func NewMemofs() (*MemoFs, error) {
+	repoDir := os.Getenv("MEFS_PATH")
 	addr, headers, err := mclient.GetMemoClientInfo(repoDir)
 	if err != nil {
 		return nil, err
