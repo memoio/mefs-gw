@@ -384,6 +384,9 @@ func (l *lfsGateway) DeleteBucket(ctx context.Context, bucket string, opts minio
 
 // ListObjects lists all blobs in LFS bucket filtered by prefix.
 func (l *lfsGateway) ListObjects(ctx context.Context, bucket, prefix, marker, delimiter string, maxKeys int) (loi minio.ListObjectsInfo, err error) {
+	if bucket == "favicon.ico" {
+		return loi, nil
+	}
 	if delimiter == SlashSeparator && prefix == SlashSeparator {
 		return loi, nil
 	}
@@ -474,9 +477,9 @@ func (e InvalidRange) Error() string {
 // startOffset indicates the starting read location of the object.
 // length indicates the total length of the object.
 func (l *lfsGateway) GetObject(ctx context.Context, bucketName, objectName string, startOffset, length int64, writer io.Writer, etag string, o minio.ObjectOptions) error {
-	if length < 0 && length != -1 {
-		return minio.ErrorRespToObjectError(minio.InvalidRange{}, bucketName, objectName)
-	}
+	// if length < 0 && length != -1 {
+	// 	return minio.ErrorRespToObjectError(minio.InvalidRange{}, bucketName, objectName)
+	// }
 
 	if l.useLocal {
 		object, size, err := l.localfs.GetObject(bucketName, objectName, startOffset)
@@ -528,13 +531,10 @@ func (l *lfsGateway) GetObject(ctx context.Context, bucketName, objectName strin
 
 // GetObjectInfo reads object info and replies back ObjectInfo.
 func (l *lfsGateway) GetObjectInfo(ctx context.Context, bucket, object string, opts minio.ObjectOptions) (objInfo minio.ObjectInfo, err error) {
-	if l.useIpfs {
-		objInfo.Size = -1
-		objInfo.Bucket = "nft"
-		return objInfo, nil
-	}
-
 	if l.useMemo {
+		if l.useIpfs {
+			bucket = ""
+		}
 		objInfo, err := l.memoGetObjectInfo(ctx, bucket, object, opts)
 		if err == nil {
 			return objInfo, nil

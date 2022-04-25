@@ -14,7 +14,7 @@ require (
 	github.com/ipfs/go-unixfs v0.3.1
 	github.com/memoio/go-mefs-v2 v0.0.0-00010101000000-000000000000
 	// github.com/memoio/minio v0.2.4
-	github.com/memoio/minio v0.3.0
+	github.com/memoio/minio v0.3.1
 	github.com/minio/cli v1.22.0
 	github.com/minio/madmin-go v1.3.6
 	github.com/minio/minio-go/v7 v7.0.23
@@ -32,6 +32,6 @@ require (
 replace (
 	// github.com/memoio/console => ../console
 	github.com/memoio/go-mefs-v2 => ../go-mefs-v2
-	// github.com/memoio/minio => /home/lighthouse/g-project/minio
+	// github.com/memoio/minio => ../minio
 	memoc => ../memo-go-contracts-v2
 )

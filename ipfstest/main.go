@@ -3,9 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"io/ioutil"
 	"log"
-	"os"
 
 	miniogo "github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -29,9 +27,9 @@ func main() {
 	if err != nil {
 		fmt.Println("New s3 client err: ", err)
 	}
-	// bucketName := "test"
-	// // objectNeme := "testdata4"
-	// f, err := os.Open("1.txt")
+	bucketName := "mefstest"
+	// objectNeme := "testdata4"
+	// f, err := os.Open("/home/hekai/test/test.mp4")
 	// if err != nil {
 	// 	log.Println(err)
 	// }
@@ -69,13 +67,22 @@ func main() {
 	// }
 
 	// get memo from cid
+	// {
+	// 	data, err := client.GetObject(ctx, "nft", "bafybeia6mvfj26kvihqowmxzmkzluaui4eso27yezv3egjmokwjmodicau", miniogo.GetObjectOptions{})
+	// 	if err != nil {
+	// 		log.Println(err)
+	// 	}
+	// 	buf, _ := ioutil.ReadAll(data)
+	// 	os.WriteFile("2.mp4", buf, 0644)
+
+	// }
+
+	// get memp bucket version
 	{
-		data, err := client.GetObject(ctx, "nft", "bafkreic3ypzvwied7qqcfshcyeufe7kyg3sf4xw5ioafhw2hviwlzd4grq", miniogo.GetObjectOptions{})
+		config, err := client.GetBucketVersioning(ctx, bucketName)
 		if err != nil {
 			log.Println(err)
 		}
-		buf, _ := ioutil.ReadAll(data)
-		os.WriteFile("2.txt", buf, 0644)
-
+		log.Println(config)
 	}
 }

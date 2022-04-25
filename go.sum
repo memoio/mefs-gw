@@ -1680,8 +1680,8 @@ github.com/memoio/console v0.15.8/go.mod h1:E566ja72w5gvAGpLopsXUszA1Mgp6uXbZZtx
 github.com/memoio/console v0.16.0 h1:2UjJSMw7JMP6crRAF5EVAYZxiCBvTuTI4mHAjrHZjJY=
 github.com/memoio/console v0.16.0/go.mod h1:E566ja72w5gvAGpLopsXUszA1Mgp6uXbZZtxrp4VxP8=
 github.com/memoio/minio v0.2.4/go.mod h1:XdYanSAnx8f7X5PaetSybr2yDLE7Hv3anua/vDLHKcQ=
-github.com/memoio/minio v0.3.0 h1:rN9NX0KMkfUfYRlJlsEbuoTv9Xbn5qykiklQp5LQyp8=
-github.com/memoio/minio v0.3.0/go.mod h1:jRMguTEHRQBm2Rvd+Tp+CaDOxO+UX9Q7ShBvnWCTGXQ=
+github.com/memoio/minio v0.3.1 h1:ni/bW/J7SotaKgdVwvBteUZyAjeECYTzBHh5FCmwBVE=
+github.com/memoio/minio v0.3.1/go.mod h1:jRMguTEHRQBm2Rvd+Tp+CaDOxO+UX9Q7ShBvnWCTGXQ=
 github.com/mgutz/ansi v0.0.0-20170206155736-9520e82c474b h1:j7+1HpAFS1zy5+Q4qx1fWh90gTKwiN4QCGoY9TWyyO4=
 github.com/mgutz/ansi v0.0.0-20170206155736-9520e82c474b/go.mod h1:01TrycV0kFyexm33Z7vhZRXopbI8J3TDReVlkTgMUxE=
 github.com/microcosm-cc/bluemonday v1.0.1/go.mod h1:hsXNsILzKxV+sX77C5b8FSuKF00vh2OMYv+xgHpAMF4=

@@ -109,6 +109,9 @@ func (m *MemoFs) ListObjects(ctx context.Context, bucket string, prefix, marker,
 }
 
 func (m *MemoFs) GetObject(ctx context.Context, bucketName, objectName string, startOffset, length int64, writer io.Writer, flag bool) error {
+	if flag {
+		bucketName = ""
+	}
 	if bucketName == minioMetaBucket && objectName == dataUsageObjNamePath {
 		mtime := int64(0)
 		dui := minio.DataUsageInfo{
@@ -143,9 +146,7 @@ func (m *MemoFs) GetObject(ctx context.Context, bucketName, objectName string, s
 		writer.Write(res)
 		return nil
 	}
-	if flag {
-		bucketName = ""
-	}
+
 	napi, closer, err := mclient.NewUserNode(ctx, m.addr, m.headers)
 	if err != nil {
 		return err
@@ -160,14 +161,16 @@ func (m *MemoFs) GetObject(ctx context.Context, bucketName, objectName string, s
 	if length == -1 {
 		length = int64(objInfo.Size)
 	}
-
-	buInfo, err := napi.HeadBucket(ctx, bucketName)
-	if err != nil {
-		return err
+	stepLen := int64(build.DefaultSegSize)
+	if !flag {
+		buInfo, err := napi.HeadBucket(ctx, bucketName)
+		if err != nil {
+			return err
+		}
+		stripeCnt := 4 * 64 / buInfo.DataCount
+		stepLen = int64(build.DefaultSegSize * stripeCnt * buInfo.DataCount)
 	}
 
-	stripeCnt := 4 * 64 / buInfo.DataCount
-	stepLen := int64(build.DefaultSegSize * stripeCnt * buInfo.DataCount)
 	start := int64(startOffset)
 	oSize := startOffset + length
 
