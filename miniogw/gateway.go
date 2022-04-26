@@ -284,8 +284,16 @@ func (l *lfsGateway) SetBucketPolicy(ctx context.Context, bucket string, bucketP
 
 // GetBucketPolicy will get policy on bucket.
 func (l *lfsGateway) GetBucketPolicy(ctx context.Context, bucket string) (*policy.Policy, error) {
+
+	if bucket == "favicon.ico" || !viper.GetBool("common.url_allow") {
+		return &policy.Policy{}, nil
+	}
 	if l.useMemo {
 		return l.memoGetBucketPolicy(ctx, bucket)
+	}
+
+	if l.useS3 {
+		return l.s3GetBucketPolicy(ctx, bucket)
 	}
 	return nil, minio.NotImplemented{}
 }
@@ -326,7 +334,7 @@ func (l *lfsGateway) MakeBucketWithLocation(ctx context.Context, bucket string, 
 // GetBucketInfo gets bucket metadata.
 func (l *lfsGateway) GetBucketInfo(ctx context.Context, bucket string) (bi minio.BucketInfo, err error) {
 	if l.useIpfs {
-		bi.Name = "nft"
+		bi.Name = "mefstest"
 		return bi, nil
 	}
 
@@ -384,9 +392,6 @@ func (l *lfsGateway) DeleteBucket(ctx context.Context, bucket string, opts minio
 
 // ListObjects lists all blobs in LFS bucket filtered by prefix.
 func (l *lfsGateway) ListObjects(ctx context.Context, bucket, prefix, marker, delimiter string, maxKeys int) (loi minio.ListObjectsInfo, err error) {
-	if bucket == "favicon.ico" {
-		return loi, nil
-	}
 	if delimiter == SlashSeparator && prefix == SlashSeparator {
 		return loi, nil
 	}
@@ -518,12 +523,11 @@ func (l *lfsGateway) GetObject(ctx context.Context, bucketName, objectName strin
 	}
 
 	if l.useIpfs {
-		data, err := l.ipfs.GetObject(objectName)
+		err := l.ipfs.GetObject(objectName, writer)
 		if err != nil {
-			logger.Errorf("get ipfs error: ", err)
+			logger.Errorf("Ipfs getobject error:", err, "bucket: ", bucketName, "object: ", objectName)
 			return err
 		}
-		writer.Write(data)
 		return nil
 	}
 	return nil
@@ -603,22 +607,18 @@ func (l *lfsGateway) PutObject(ctx context.Context, bucket, object string, r *mi
 		return objInfo, err
 	}
 
-	if l.useS3 && l.useMemo {
-		oi, err := l.memoPutObject(ctx, bucket, object, reader2, opts)
+	if l.useIpfs && l.useS3 {
+		cid, err := l.ipfs.Putobject(reader)
 		if err != nil {
-			logger.Error("MEMOPUT: put obejct to memo error", err, " bucket: ", bucket, " obejct: ", object)
+			log.Println("put object to ipfs error:", err, " bucket: ", bucket, " obejct: ", object)
+		} else {
+			log.Println("put obejct to ipfs Success!", cid)
 		}
-
-		go func(reader1 *bytes.Buffer, bucket, object string, size int64, opts minio.ObjectOptions) {
-			_, err := l.s3PutObject(context.TODO(), bucket, object, reader1, size, opts)
-			if err != nil {
-				logger.Error("put obejct to s3 error: ", err, "bucket: ", bucket, "obejct: ", object)
-			} else {
-				log.Println("put object to s3 Success!")
-			}
-		}(reader1, bucket, object, data.Size(), opts)
-
-		l.addUsedBytes(limitedReader.ReadedBytes())
+		opts.UserDefined["name"] = object
+		oi, err := l.s3PutObject(ctx, bucket, cid, reader1, data.Size(), opts)
+		if err != nil {
+			return oi, err
+		}
 		return oi, nil
 	}
 
@@ -643,6 +643,25 @@ func (l *lfsGateway) PutObject(ctx context.Context, bucket, object string, r *mi
 		return oi, nil
 	}
 
+	if l.useS3 && l.useMemo {
+		oi, err := l.memoPutObject(ctx, bucket, object, reader2, opts)
+		if err != nil {
+			logger.Error("MEMOPUT: put obejct to memo error", err, " bucket: ", bucket, " obejct: ", object)
+		}
+
+		go func(reader1 *bytes.Buffer, bucket, object string, size int64, opts minio.ObjectOptions) {
+			_, err := l.s3PutObject(context.TODO(), bucket, object, reader1, size, opts)
+			if err != nil {
+				logger.Error("put obejct to s3 error: ", err, "bucket: ", bucket, "obejct: ", object)
+			} else {
+				log.Println("put object to s3 Success!")
+			}
+		}(reader1, bucket, object, data.Size(), opts)
+
+		l.addUsedBytes(limitedReader.ReadedBytes())
+		return oi, nil
+	}
+
 	if l.useMemo {
 		oi, err := l.memoPutObject(ctx, bucket, object, reader, opts)
 		if err != nil {
@@ -659,6 +678,7 @@ func (l *lfsGateway) PutObject(ctx context.Context, bucket, object string, r *mi
 		}
 		return oi, nil
 	}
+
 	if l.useLocal {
 		closer.Close()
 		err = l.localfs.FinishPut(bucket, object, oi.Size, true)

@@ -3,6 +3,7 @@ package miniogw
 import (
 	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"time"
 
@@ -10,6 +11,8 @@ import (
 	"github.com/minio/madmin-go"
 	miniogo "github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/tags"
+	"github.com/minio/pkg/bucket/policy"
+	"github.com/minio/pkg/bucket/policy/condition"
 	"github.com/spf13/viper"
 )
 
@@ -54,6 +57,41 @@ func initS3(creds madmin.Credentials, g *Mefs, gw *lfsGateway) error {
 	// 设置s3 client
 	gw.Client = clnt
 	return nil
+}
+
+func (l *lfsGateway) s3GetBucketPolicy(ctx context.Context, bucket string) (*policy.Policy, error) {
+	bi, err := l.s3GetBucketInfo(ctx, bucket)
+	if err != nil {
+		return nil, err
+	}
+	pb, ok := l.polices[bucket]
+	if ok {
+		return pb, nil
+	}
+
+	pp := &policy.Policy{
+		ID:      policy.ID(fmt.Sprintf("Name: %s, Created: %s", bi.Name, bi.Created)),
+		Version: policy.DefaultVersion,
+		Statements: []policy.Statement{
+			policy.NewStatement(
+				"",
+				policy.Allow,
+
+				policy.NewPrincipal("*"),
+				policy.NewActionSet(
+					policy.GetObjectAction,
+					//policy.ListBucketAction,
+				),
+				policy.NewResourceSet(
+					policy.NewResource(bucket, ""),
+					policy.NewResource(bucket, "*"),
+				),
+				condition.NewFunctions(),
+			),
+		},
+	}
+
+	return pp, nil
 }
 
 func (l *lfsGateway) s3GetBucketInfo(ctx context.Context, bucket string) (bi minio.BucketInfo, err error) {

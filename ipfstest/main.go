@@ -3,7 +3,9 @@ package main
 import (
 	"context"
 	"fmt"
+	"io/ioutil"
 	"log"
+	"os"
 
 	miniogo "github.com/minio/minio-go/v7"
 	"github.com/minio/minio-go/v7/pkg/credentials"
@@ -77,12 +79,21 @@ func main() {
 
 	// }
 
-	// get memp bucket version
+	// get memo bucket version
+	// {
+	// 	config, err := client.GetBucketVersioning(ctx, bucketName)
+	// 	if err != nil {
+	// 		log.Println(err)
+	// 	}
+	// 	log.Println(config)
+	// }
+	// get object for memo and s3
 	{
-		config, err := client.GetBucketVersioning(ctx, bucketName)
+		data, err := client.GetObject(ctx, bucketName, "3.txt", miniogo.GetObjectOptions{})
 		if err != nil {
 			log.Println(err)
 		}
-		log.Println(config)
+		buf, _ := ioutil.ReadAll(data)
+		os.WriteFile("3.txt", buf, 0644)
 	}
 }

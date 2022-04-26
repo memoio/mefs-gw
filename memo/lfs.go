@@ -15,7 +15,6 @@ import (
 	"github.com/memoio/go-mefs-v2/build"
 	mcode "github.com/memoio/go-mefs-v2/lib/code"
 	"github.com/memoio/go-mefs-v2/lib/pb"
-	"github.com/memoio/go-mefs-v2/lib/types"
 	mtypes "github.com/memoio/go-mefs-v2/lib/types"
 	minio "github.com/memoio/minio/cmd"
 )
@@ -180,7 +179,7 @@ func (m *MemoFs) GetObject(ctx context.Context, bucketName, objectName string, s
 			readLen = oSize - start
 		}
 
-		doo := types.DownloadObjectOptions{
+		doo := mtypes.DownloadObjectOptions{
 			Start:  start,
 			Length: readLen,
 		}

@@ -2,7 +2,6 @@ package memo
 
 import (
 	"io"
-	"io/ioutil"
 
 	shapi "github.com/ipfs/go-ipfs-api"
 )
@@ -35,12 +34,15 @@ func (i *IpFs) Putobject(r io.Reader) (string, error) {
 	return hash, nil
 }
 
-func (i *IpFs) GetObject(cid string) ([]byte, error) {
+func (i *IpFs) GetObject(cid string, writer io.Writer) error {
 	sh := shapi.NewShell(i.host)
 	r, err := sh.Cat(cid)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	data, _ := ioutil.ReadAll(r)
-	return data, nil
+	defer r.Close()
+	if _, err := io.Copy(writer, r); err != nil {
+		return err
+	}
+	return nil
 }
