@@ -608,9 +608,10 @@ func (l *lfsGateway) PutObject(ctx context.Context, bucket, object string, r *mi
 	}
 
 	if l.useIpfs && l.useS3 {
-		cid, err := l.ipfs.Putobject(reader)
+		cid, err := l.ipfs.Putobject(reader2)
 		if err != nil {
 			log.Println("put object to ipfs error:", err, " bucket: ", bucket, " obejct: ", object)
+			return objInfo, err
 		} else {
 			log.Println("put obejct to ipfs Success!", cid)
 		}
@@ -619,6 +620,7 @@ func (l *lfsGateway) PutObject(ctx context.Context, bucket, object string, r *mi
 		if err != nil {
 			return oi, err
 		}
+		oi.ETag = cid
 		return oi, nil
 	}
 
