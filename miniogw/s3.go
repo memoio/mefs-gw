@@ -208,7 +208,6 @@ func (l *lfsGateway) s3GetObjectInfo(ctx context.Context, bucket, object string,
 }
 
 func (l *lfsGateway) s3PutObject(ctx context.Context, bucket, object string, reader *bytes.Buffer, size int64, opts minio.ObjectOptions) (objInfo minio.ObjectInfo, err error) {
-
 	var tagMap map[string]string
 	if tagstr, ok := opts.UserDefined["X-Amz-Tagging"]; ok && tagstr != "" {
 		tagObj, err := tags.ParseObjectTags(tagstr)
