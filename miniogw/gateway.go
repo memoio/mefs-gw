@@ -21,12 +21,14 @@ import (
 	"github.com/minio/minio-go/v7/pkg/credentials"
 	"github.com/minio/minio-go/v7/pkg/s3utils"
 	"github.com/minio/pkg/bucket/policy"
+	"github.com/minio/pkg/mimedb"
 	"github.com/spf13/viper"
 	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/syndtr/goleveldb/leveldb/opt"
 
 	logging "github.com/memoio/go-mefs-v2/lib/log"
 	"github.com/memoio/mefs-gateway/memo"
+	"github.com/memoio/mefs-gateway/miniogw/mutipart"
 	"github.com/memoio/mefs-gateway/utils"
 )
 
@@ -181,10 +183,6 @@ func (g *Mefs) NewGatewayLayer(creds madmin.Credentials) (minio.ObjectLayer, err
 
 	if gw.useMemo {
 		logger.Debug("use Memo backend")
-		err := initMemo()
-		if err != nil {
-			logger.Error("init Memo error: ", err)
-		}
 	}
 
 	if gw.useIpfs {
@@ -221,6 +219,8 @@ type lfsGateway struct {
 	readOnly bool
 
 	usedBytes uint64
+
+	mutipart *mutipart.MultipartUploads
 
 	memofs  *memo.MemoFs
 	localfs *utils.LocalFS
@@ -446,7 +446,9 @@ func (l *lfsGateway) GetObjectNInfo(ctx context.Context, bucket, object string, 
 	if err != nil {
 		return nil, minio.ErrorRespToObjectError(err, bucket, object)
 	}
-
+	if objInfo.UserDefined["content-type"] == "" {
+		objInfo.UserDefined["content-type"] = mimedb.TypeByExtension(path.Ext(object))
+	}
 	fn, off, length, err := minio.NewGetObjectReader(rs, objInfo, opts)
 	if err != nil {
 		return nil, minio.ErrorRespToObjectError(err, bucket, object)
@@ -535,6 +537,7 @@ func (l *lfsGateway) GetObject(ctx context.Context, bucketName, objectName strin
 
 // GetObjectInfo reads object info and replies back ObjectInfo.
 func (l *lfsGateway) GetObjectInfo(ctx context.Context, bucket, object string, opts minio.ObjectOptions) (objInfo minio.ObjectInfo, err error) {
+	log.Println("GetObjectInfo", bucket, object)
 	if l.useMemo {
 		if l.useIpfs {
 			bucket = ""
@@ -554,6 +557,7 @@ func (l *lfsGateway) GetObjectInfo(ctx context.Context, bucket, object string, o
 	if l.useLocal {
 		return l.localfs.GetObjectInfo(bucket, object)
 	}
+
 	return objInfo, nil
 }
 
@@ -665,7 +669,7 @@ func (l *lfsGateway) PutObject(ctx context.Context, bucket, object string, r *mi
 	}
 
 	if l.useMemo {
-		oi, err := l.memoPutObject(ctx, bucket, object, reader, opts)
+		oi, err := l.memoPutObject(ctx, bucket, object, reader2, opts)
 		if err != nil {
 			return objInfo, minio.ErrorRespToObjectError(err, bucket, object)
 		}
@@ -698,46 +702,11 @@ func (l *lfsGateway) PutObject(ctx context.Context, bucket, object string, r *mi
 // CopyObject copies an object from source bucket to a destination bucket.
 func (l *lfsGateway) CopyObject(ctx context.Context, srcBucket, srcObject, dstBucket, dstObject string, srcInfo minio.ObjectInfo, srcOpts, dstOpts minio.ObjectOptions) (objInfo minio.ObjectInfo, err error) {
 	return objInfo, minio.NotImplemented{}
-	// if srcOpts.CheckPrecondFn != nil && srcOpts.CheckPrecondFn(srcInfo) {
-	// 	return minio.ObjectInfo{}, minio.PreConditionFailed{}
-	// }
-	// // Set this header such that following CopyObject() always sets the right metadata on the destination.
-	// // metadata input is already a trickled down value from interpreting x-amz-metadata-directive at
-	// // handler layer. So what we have right now is supposed to be applied on the destination object anyways.
-	// // So preserve it by adding "REPLACE" directive to save all the metadata set by CopyObject API.
-	// srcInfo.UserDefined["x-amz-metadata-directive"] = "REPLACE"
-	// srcInfo.UserDefined["x-amz-copy-source-if-match"] = srcInfo.ETag
-	// header := make(http.Header)
-	// if srcOpts.ServerSideEncryption != nil {
-	// 	encrypt.SSECopy(srcOpts.ServerSideEncryption).Marshal(header)
-	// }
-
-	// if dstOpts.ServerSideEncryption != nil {
-	// 	dstOpts.ServerSideEncryption.Marshal(header)
-	// }
-
-	// for k, v := range header {
-	// 	srcInfo.UserDefined[k] = v[0]
-	// }
-
-	// if _, err = l.Client.CopyObject(ctx, srcBucket, srcObject, dstBucket, dstObject, srcInfo.UserDefined, miniogo.CopySrcOptions{}, miniogo.PutObjectOptions{}); err != nil {
-	// 	return objInfo, minio.ErrorRespToObjectError(err, srcBucket, srcObject)
-	// }
-	// return l.GetObjectInfo(ctx, dstBucket, dstObject, dstOpts)
 }
 
 // DeleteObject deletes a blob in bucket.
 func (l *lfsGateway) DeleteObject(ctx context.Context, bucket, object string, opts minio.ObjectOptions) (minio.ObjectInfo, error) {
 	return minio.ObjectInfo{}, minio.NotImplemented{}
-	// err := l.Client.RemoveObject(ctx, bucket, object, miniogo.RemoveObjectOptions{})
-	// if err != nil {
-	// 	return minio.ObjectInfo{}, minio.ErrorRespToObjectError(err, bucket, object)
-	// }
-
-	// return minio.ObjectInfo{
-	// 	Bucket: bucket,
-	// 	Name:   object,
-	// }, nil
 }
 
 func (l *lfsGateway) DeleteObjects(ctx context.Context, bucket string, objects []minio.ObjectToDelete, opts minio.ObjectOptions) ([]minio.DeletedObject, []error) {

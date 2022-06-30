@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"strconv"
 	"strings"
 	"time"
@@ -15,35 +14,24 @@ import (
 	miniogo "github.com/minio/minio-go/v7"
 	"github.com/minio/pkg/bucket/policy"
 	"github.com/minio/pkg/bucket/policy/condition"
-	"github.com/spf13/viper"
 )
 
-func initMemo() error {
-	repoDir := viper.GetString("memo.repo_dir")
-	err := os.Setenv("MEFS_PATH", repoDir)
+func (l *lfsGateway) getMemofs() error {
+	var err error
+	l.memofs, err = memo.NewMemofs()
 	if err != nil {
 		return err
 	}
 	return nil
 }
 
-func (l *lfsGateway) checkMemofs() bool {
-	if l.memofs == nil {
-		logger.Debug("Get Memo Info")
-		var err error
-		l.memofs, err = memo.NewMemofs()
-		if err != nil {
-			logger.Error("Get memo error: ", err)
-			return false
-		}
-		return true
-	}
-	return true
-}
-
 func (l *lfsGateway) memoGetBucketPolicy(ctx context.Context, bucket string) (*policy.Policy, error) {
-	if !l.checkMemofs() {
-		return nil, minio.NotImplemented{}
+	if bucket == "favicon.ico" {
+		return &policy.Policy{}, nil
+	}
+	err := l.getMemofs()
+	if err != nil {
+		return nil, err
 	}
 	bi, err := l.memofs.GetBucketInfo(ctx, bucket)
 	if err != nil {
@@ -66,7 +54,7 @@ func (l *lfsGateway) memoGetBucketPolicy(ctx context.Context, bucket string) (*p
 				policy.NewPrincipal("*"),
 				policy.NewActionSet(
 					policy.GetObjectAction,
-					//policy.ListBucketAction,
+					policy.ListBucketAction,
 				),
 				policy.NewResourceSet(
 					policy.NewResource(bucket, ""),
@@ -81,21 +69,22 @@ func (l *lfsGateway) memoGetBucketPolicy(ctx context.Context, bucket string) (*p
 }
 
 func (l *lfsGateway) memoMakeBucketWithLocation(ctx context.Context, bucket string) error {
-	if !l.checkMemofs() {
-		return minio.NotImplemented{}
+	err := l.getMemofs()
+	if err != nil {
+		return err
 	}
-	err := l.memofs.MakeBucketWithLocation(ctx, bucket)
+	err = l.memofs.MakeBucketWithLocation(ctx, bucket)
 	return err
 }
 
 func (l *lfsGateway) memoGetBucketInfo(ctx context.Context, bucket string) (bi minio.BucketInfo, err error) {
-	if !l.checkMemofs() {
-		logger.Error("memoGetBucketInfo")
-		return bi, minio.NotImplemented{}
+	err = l.getMemofs()
+	if err != nil {
+		return bi, err
 	}
 	bucketInfo, err := l.memofs.GetBucketInfo(ctx, bucket)
 	if err != nil {
-		logger.Error("memoGetBucketInfo")
+		logger.Error("memoGetBucketInfo error: ", err)
 		return bi, err
 	}
 	bi.Name = bucket
@@ -104,8 +93,9 @@ func (l *lfsGateway) memoGetBucketInfo(ctx context.Context, bucket string) (bi m
 }
 
 func (l *lfsGateway) memoListBuckets(ctx context.Context) (bs []minio.BucketInfo, err error) {
-	if !l.checkMemofs() {
-		return nil, minio.NotImplemented{}
+	err = l.getMemofs()
+	if err != nil {
+		return bs, err
 	}
 	buckets, err := l.memofs.ListBuckets(ctx)
 	if err != nil {
@@ -122,8 +112,9 @@ func (l *lfsGateway) memoListBuckets(ctx context.Context) (bs []minio.BucketInfo
 }
 
 func (l *lfsGateway) memoListObjects(ctx context.Context, bucket, prefix, marker, delimiter string, maxKeys int) (loi minio.ListObjectsInfo, err error) {
-	if !l.checkMemofs() {
-		return loi, minio.NotImplemented{}
+	err = l.getMemofs()
+	if err != nil {
+		return loi, err
 	}
 	mloi, err := l.memofs.ListObjects(ctx, bucket, prefix, marker, delimiter, maxKeys)
 	if err != nil {
@@ -153,8 +144,9 @@ func (l *lfsGateway) memoListObjects(ctx context.Context, bucket, prefix, marker
 
 func (l *lfsGateway) memoListObjectsV2(ctx context.Context, bucket, prefix, continuationToken, delimiter string, maxKeys int,
 	fetchOwner bool, startAfter string) (loiv2 minio.ListObjectsV2Info, err error) {
-	if !l.checkMemofs() {
-		return loiv2, minio.NotImplemented{}
+	err = l.getMemofs()
+	if err != nil {
+		return loiv2, err
 	}
 	marker := continuationToken
 	if marker == "" {
@@ -178,13 +170,11 @@ func (l *lfsGateway) memoListObjectsV2(ctx context.Context, bucket, prefix, cont
 }
 
 func (l *lfsGateway) memoGetObject(ctx context.Context, bucketName, objectName string, startOffset, length int64, writer io.Writer, etag string, o minio.ObjectOptions) error {
-	if !l.checkMemofs() {
-		if objectName == "buckets/.usage.json" {
-			return nil
-		}
-		return minio.NotImplemented{}
+	err := l.getMemofs()
+	if err != nil {
+		return err
 	}
-	err := l.memofs.GetObject(ctx, bucketName, objectName, startOffset, length, writer, l.useIpfs)
+	err = l.memofs.GetObject(ctx, bucketName, objectName, startOffset, length, writer, l.useIpfs)
 	if objectName == "buckets/.usage.json" {
 		return nil
 	}
@@ -192,8 +182,9 @@ func (l *lfsGateway) memoGetObject(ctx context.Context, bucketName, objectName s
 }
 
 func (l *lfsGateway) memoGetObjectInfo(ctx context.Context, bucket, object string, opts minio.ObjectOptions) (objInfo minio.ObjectInfo, err error) {
-	if !l.checkMemofs() {
-		return objInfo, minio.NotImplemented{}
+	err = l.getMemofs()
+	if err != nil {
+		return objInfo, err
 	}
 	moi, err := l.memofs.GetObjectInfo(ctx, bucket, object)
 	if err != nil {
@@ -220,19 +211,32 @@ func (l *lfsGateway) memoGetObjectInfo(ctx context.Context, bucket, object strin
 }
 
 func (l *lfsGateway) memoPutObject(ctx context.Context, bucket, object string, reader io.Reader, opts minio.ObjectOptions) (objInfo minio.ObjectInfo, err error) {
-	if !l.checkMemofs() {
-		return objInfo, minio.NotImplemented{}
+	err = l.getMemofs()
+	if err != nil {
+		return objInfo, err
 	}
+	putOpts := miniogo.PutObjectOptions{
+		UserMetadata:         opts.UserDefined,
+		ServerSideEncryption: opts.ServerSideEncryption,
+		SendContentMd5:       true,
+	}
+
 	moi, err := l.memofs.PutObject(ctx, bucket, object, reader, opts.UserDefined)
 	if err != nil {
 		return objInfo, err
 	}
+	contentType := putOpts.ContentType
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	opts.UserDefined["Content-Type"] = contentType
 	etag, _ := metag.ToString(moi.ETag)
 	oi := miniogo.ObjectInfo{
-		ETag:     etag,
-		Size:     int64(moi.Size),
-		Key:      object,
-		Metadata: minio.ToMinioClientObjectInfoMetadata(opts.UserDefined),
+		ETag:        etag,
+		Size:        int64(moi.Size),
+		Key:         object,
+		Metadata:    minio.ToMinioClientObjectInfoMetadata(opts.UserDefined),
+		ContentType: contentType,
 	}
 	return minio.FromMinioClientObjectInfo(bucket, oi), nil
 }

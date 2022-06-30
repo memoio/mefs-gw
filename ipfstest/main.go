@@ -1,7 +1,9 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
 	"fmt"
 	"io/ioutil"
 	"log"
@@ -11,10 +13,12 @@ import (
 	"github.com/minio/minio-go/v7/pkg/credentials"
 )
 
+var FileSize int64 = 1024*1024*1024 + 32
+
 func main() {
 	// ipfsserver := memo.NewIpfsClient("127.0.0.1", "8000")
-	accessKey := "hekai"
-	secretKey := "12345678"
+	accessKey := "memo"
+	secretKey := "memoriae"
 	endpoint := "0.0.0.0:5080"
 
 	ctx := context.Background()
@@ -30,7 +34,7 @@ func main() {
 		fmt.Println("New s3 client err: ", err)
 	}
 	bucketName := "mefstest"
-	// objectNeme := "testdata4"
+	objectNeme := "testdata1g.txt"
 	// f, err := os.Open("/home/hekai/test/test.mp4")
 	// if err != nil {
 	// 	log.Println(err)
@@ -38,9 +42,6 @@ func main() {
 	// defer f.Close()
 	// fi, _ := f.Stat()
 
-	// data := make([]byte, 256*1024+32)
-	// rand.Read(data)
-	// r := bytes.NewBuffer(data)
 	// put memo and ipfs
 	// {
 	// 	metadata := make(map[string]string)
@@ -96,4 +97,28 @@ func main() {
 		buf, _ := ioutil.ReadAll(data)
 		os.WriteFile("3.txt", buf, 0644)
 	}
+
+	{
+		data := make([]byte, FileSize)
+		rand.Read(data)
+		r := bytes.NewBuffer(data)
+		metadata := make(map[string]string)
+		metadata["hekai"] = "hekai"
+		info, err := client.PutObject(ctx, bucketName, objectNeme, r, FileSize, miniogo.PutObjectOptions{UserMetadata: metadata})
+		if err != nil {
+			fmt.Println("PutObject err:", err)
+			return
+		}
+		fmt.Println("cid Info:", info.ETag)
+	}
+
+	// delete object
+	// {
+	// 	err := client.RemoveObject(ctx, bucketName, objectNeme, miniogo.RemoveObjectOptions{})
+	// 	if err != nil {
+	// 		log.Println("delete error: ", err)
+	// 		return
+	// 	}
+	// 	log.Println("Delete success!")
+	// }
 }
