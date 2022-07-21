@@ -5,6 +5,7 @@ import "errors"
 const USED_BYTES_KEY = "usedBytes"
 
 var BucketName string
+var VirtualBucket string
 var MaxUploadableBytes uint64
 
 var (
