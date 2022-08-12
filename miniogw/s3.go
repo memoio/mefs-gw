@@ -80,7 +80,7 @@ func (l *lfsGateway) s3GetBucketPolicy(ctx context.Context, bucket string) (*pol
 				policy.NewPrincipal("*"),
 				policy.NewActionSet(
 					policy.GetObjectAction,
-					//policy.ListBucketAction,
+					policy.ListBucketAction,
 				),
 				policy.NewResourceSet(
 					policy.NewResource(bucket, ""),

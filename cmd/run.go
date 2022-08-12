@@ -2,11 +2,14 @@ package cmd
 
 import (
 	"errors"
+	"fmt"
 	"io/ioutil"
 	"log"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path"
+	"runtime"
 	"strconv"
 	"syscall"
 
@@ -86,27 +89,35 @@ var stopCmd = &cobra.Command{
 	Use:   "stop",
 	Short: "Stop a mefs s3 gateway",
 	RunE: func(cmd *cobra.Command, args []string) error {
-
 		rootDir, err := homedir.Expand("~/.mefs_gw")
 		if err != nil {
 			return err
 		}
 
-		f, err := os.Open(path.Join(rootDir, "pid"))
-		if err != nil {
-			log.Println(err)
-			return errors.New("open file failed")
-		}
-		pd, _ := ioutil.ReadAll(f)
-		pid, err := strconv.Atoi(string(pd))
+		pd, _ := ioutil.ReadFile(path.Join(rootDir, "pid"))
 		if err != nil {
 			return errors.New("stop failed")
 		}
-		syscall.Kill(pid, 15)
+		err = kill(string(pd))
+		if err != nil {
+			return err
+		}
+
 		log.Println("gateway gracefully exit...")
 
 		return nil
 	},
+}
+
+func kill(pid string) error {
+	switch runtime.GOOS {
+	case "linux":
+		return exec.Command("kill", "-15", pid).Run()
+	case "windows":
+		return exec.Command("kill", "/F", "/T", "/PID", pid).Run()
+	default:
+		return fmt.Errorf("unsupported platform %s", runtime.GOOS)
+	}
 }
 
 func init() {

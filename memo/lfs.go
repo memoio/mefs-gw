@@ -7,6 +7,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"strings"
 	"time"
 
 	"golang.org/x/xerrors"
@@ -24,6 +25,14 @@ var (
 	dataUsageObjNamePath = "buckets/.usage.json"
 )
 
+var (
+	errLfsServiceNotReady = xerrors.New("lfs service not ready")
+	errBucket             = xerrors.New("bucket error")
+	errObject             = xerrors.New("object error")
+	errMutiUpload         = xerrors.New("mutiupload error")
+	errAbort              = xerrors.New("MultipartUpload abort")
+)
+
 type MemoFs struct {
 	addr    string
 	headers http.Header
@@ -35,6 +44,16 @@ func NewMemofs() (*MemoFs, error) {
 	if err != nil {
 		return nil, err
 	}
+	napi, closer, err := mclient.NewUserNode(context.Background(), addr, headers)
+	if err != nil {
+		return nil, err
+	}
+	defer closer()
+	_, err = napi.ShowStorage(context.Background())
+	if err != nil {
+		return nil, err
+	}
+
 	return &MemoFs{
 		addr:    addr,
 		headers: headers,
@@ -44,17 +63,17 @@ func NewMemofs() (*MemoFs, error) {
 func (m *MemoFs) MakeBucketWithLocation(ctx context.Context, bucket string) error {
 	napi, closer, err := mclient.NewUserNode(ctx, m.addr, m.headers)
 	if err != nil {
-		return err
+		return convertToMinioError(errLfsServiceNotReady, bucket, "")
 	}
 	defer closer()
 	if bucket == "" {
-		return xerrors.New("bucketname is nil")
+		return convertToMinioError(errBucket, bucket, "")
 	}
 	opts := mcode.DefaultBucketOptions()
 
 	_, err = napi.CreateBucket(ctx, bucket, opts)
 	if err != nil {
-		return err
+		return convertToMinioError(errBucket, bucket, "")
 	}
 	return nil
 }
@@ -62,13 +81,13 @@ func (m *MemoFs) MakeBucketWithLocation(ctx context.Context, bucket string) erro
 func (m *MemoFs) GetBucketInfo(ctx context.Context, bucket string) (bi mtypes.BucketInfo, err error) {
 	napi, closer, err := mclient.NewUserNode(ctx, m.addr, m.headers)
 	if err != nil {
-		return bi, err
+		return bi, convertToMinioError(errLfsServiceNotReady, bucket, "")
 	}
 	defer closer()
 
 	bi, err = napi.HeadBucket(ctx, bucket)
 	if err != nil {
-		return bi, err
+		return bi, convertToMinioError(errBucket, bucket, "")
 	}
 	return bi, nil
 }
@@ -76,13 +95,13 @@ func (m *MemoFs) GetBucketInfo(ctx context.Context, bucket string) (bi mtypes.Bu
 func (m *MemoFs) ListBuckets(ctx context.Context) ([]mtypes.BucketInfo, error) {
 	napi, closer, err := mclient.NewUserNode(ctx, m.addr, m.headers)
 	if err != nil {
-		return nil, err
+		return nil, convertToMinioError(errLfsServiceNotReady, "", "")
 	}
 	defer closer()
 
 	buckets, err := napi.ListBuckets(ctx, "")
 	if err != nil {
-		return nil, err
+		return nil, convertToMinioError(errBucket, "", "")
 	}
 	return buckets, nil
 }
@@ -90,7 +109,7 @@ func (m *MemoFs) ListBuckets(ctx context.Context) ([]mtypes.BucketInfo, error) {
 func (m *MemoFs) ListObjects(ctx context.Context, bucket string, prefix, marker, delimiter string, maxKeys int) (mloi mtypes.ListObjectsInfo, err error) {
 	napi, closer, err := mclient.NewUserNode(ctx, m.addr, m.headers)
 	if err != nil {
-		return mloi, err
+		return mloi, convertToMinioError(errLfsServiceNotReady, bucket, "")
 	}
 	defer closer()
 	loo := mtypes.ListObjectsOptions{
@@ -102,7 +121,7 @@ func (m *MemoFs) ListObjects(ctx context.Context, bucket string, prefix, marker,
 
 	mloi, err = napi.ListObjects(ctx, bucket, loo)
 	if err != nil {
-		return mloi, err
+		return mloi, convertToMinioError(errObject, bucket, "")
 	}
 	return mloi, nil
 }
@@ -119,7 +138,7 @@ func (m *MemoFs) GetObject(ctx context.Context, bucketName, objectName string, s
 
 		bus, err := m.ListBuckets(ctx)
 		if err != nil {
-			return err
+			return convertToMinioError(errObject, bucketName, objectName)
 		}
 		for _, bu := range bus {
 			if mtime > bu.MTime {
@@ -140,7 +159,7 @@ func (m *MemoFs) GetObject(ctx context.Context, bucketName, objectName string, s
 
 		res, err := json.Marshal(dui)
 		if err != nil {
-			return err
+			return convertToMinioError(errObject, bucketName, objectName)
 		}
 		writer.Write(res)
 		return nil
@@ -148,13 +167,13 @@ func (m *MemoFs) GetObject(ctx context.Context, bucketName, objectName string, s
 
 	napi, closer, err := mclient.NewUserNode(ctx, m.addr, m.headers)
 	if err != nil {
-		return err
+		return convertToMinioError(errLfsServiceNotReady, bucketName, objectName)
 	}
 	defer closer()
 
 	objInfo, err := napi.HeadObject(ctx, bucketName, objectName)
 	if err != nil {
-		return err
+		return convertToMinioError(errObject, bucketName, objectName)
 	}
 
 	if length == -1 {
@@ -164,7 +183,7 @@ func (m *MemoFs) GetObject(ctx context.Context, bucketName, objectName string, s
 	if !flag {
 		buInfo, err := napi.HeadBucket(ctx, bucketName)
 		if err != nil {
-			return err
+			return convertToMinioError(errObject, bucketName, objectName)
 		}
 		stripeCnt := 4 * 64 / buInfo.DataCount
 		stepLen = int64(build.DefaultSegSize * stripeCnt * buInfo.DataCount)
@@ -186,7 +205,7 @@ func (m *MemoFs) GetObject(ctx context.Context, bucketName, objectName string, s
 
 		data, err := napi.GetObject(ctx, bucketName, objectName, doo)
 		if err != nil {
-			return err
+			break
 		}
 
 		writer.Write(data)
@@ -209,13 +228,13 @@ func (m *MemoFs) GetObjectInfo(ctx context.Context, bucket, object string) (objI
 	}
 	napi, closer, err := mclient.NewUserNode(ctx, m.addr, m.headers)
 	if err != nil {
-		return objInfo, err
+		return objInfo, convertToMinioError(errLfsServiceNotReady, bucket, object)
 	}
 	defer closer()
 
 	oi, err := napi.HeadObject(ctx, bucket, object)
 	if err != nil {
-		return objInfo, err
+		return objInfo, convertToMinioError(errObject, bucket, object)
 	}
 	return oi, nil
 }
@@ -238,6 +257,54 @@ func (m *MemoFs) PutObject(ctx context.Context, bucket, object string, r io.Read
 		return objInfo, err
 	}
 	return moi, nil
+}
+
+func (m *MemoFs) StatObject(ctx context.Context, bucket, object string) (objInfo mtypes.ObjectInfo, err error) {
+	napi, closer, err := mclient.NewUserNode(ctx, m.addr, m.headers)
+	if err != nil {
+		return objInfo, convertToMinioError(errLfsServiceNotReady, bucket, object)
+	}
+	defer closer()
+
+	oi, err := napi.HeadObject(ctx, bucket, object)
+	if err != nil {
+		return objInfo, convertToMinioError(errObject, bucket, object)
+	}
+	return oi, nil
+}
+
+func convertToMinioError(err error, bucket, object string) error {
+	switch err {
+	case errLfsServiceNotReady:
+		return minio.BackendDown{}
+	case errBucket:
+		if strings.Contains(err.Error(), "invalid") {
+			return minio.BucketNameInvalid{Bucket: bucket}
+		}
+		if strings.Contains(err.Error(), "not exist") {
+			return minio.BucketNotFound{Bucket: bucket}
+		}
+		if strings.Contains(err.Error(), "already exists") {
+			return minio.BucketAlreadyExists{Bucket: bucket}
+		}
+		return minio.PrefixAccessDenied{Bucket: bucket, Object: object}
+	case errObject:
+		if strings.Contains(err.Error(), "invalid") {
+			return minio.ObjectNameInvalid{Bucket: bucket, Object: object}
+		}
+		if strings.Contains(err.Error(), "not exist") {
+			return minio.ObjectNotFound{Bucket: bucket, Object: object}
+		}
+		if strings.Contains(err.Error(), "already exists") {
+			return minio.ObjectAlreadyExists{Bucket: bucket, Object: object}
+		}
+		return minio.PrefixAccessDenied{Bucket: bucket, Object: object}
+	case nil:
+		return nil
+	default:
+		return minio.PrefixAccessDenied{Bucket: bucket, Object: object}
+
+	}
 }
 
 // func (m *MemoFs) DeleteObject()
