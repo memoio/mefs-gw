@@ -1,12 +1,13 @@
 [common]
-use_local = false
-use_s3 = true
-use_memo = true
+use_local = true
+use_s3 = false
+use_memo = false
 use_ipfs = false
+use_meeda = false
 read_only = false
-repo_dir = "/home/lighthouse/mpath"
+repo_dir = "~/user"
 max_upload_bytes = 1099511627776 # 1TiB
-bucketname = "mefstest" # set bucketname the gateway to use
+bucketname = "mefstest"          # set bucketname the gateway to use
 root_dir = "~/.mefs_gw"
 local_dir = ""
 ipfs_host = "127.0.0.1:5002"
@@ -18,3 +19,10 @@ endpoint = "s3-qos.my-sz-1.qiniu-solutions.com:29091"
 region = "z0"
 accesskey = "22taR9gKak3fXfDYT-GqSjxGc_uslfiNC0ocxPK_"
 secretkey = "VHr2Q1q3dRfZ7nXZPUnmRtlM0Wh_hDAWbzniSIlZ"
+
+[meeda]
+repo_dir = "~/user_meeda"
+url = "http://183.240.197.189:48082"
+
+[mefs]
+repo_dir = "~/user_memo"

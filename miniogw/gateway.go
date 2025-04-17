@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/ioutil"
 	"log"
 	"net/http"
 	"os"
@@ -16,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	mtypes "github.com/memoio/go-mefs-v2/lib/types"
 	minio "github.com/memoio/minio/cmd"
 	"github.com/minio/cli"
 	"github.com/minio/madmin-go"
@@ -161,10 +161,10 @@ func (g *Mefs) NewGatewayLayer(creds madmin.Credentials) (minio.ObjectLayer, err
 	gw.useLocal = viper.GetBool("common.use_local")
 	gw.useS3 = viper.GetBool("common.use_s3")
 	gw.useMemo = viper.GetBool("common.use_memo")
+	gw.useMeeda = viper.GetBool("common.use_meeda")
 	gw.readOnly = viper.GetBool("common.read_only")
-	gw.repoDir = viper.GetString("common.repo_dir")
 
-	if !gw.useLocal && !gw.useS3 && !gw.useMemo {
+	if !gw.useLocal && !gw.useS3 && !gw.useMemo && !gw.useMeeda {
 		return nil, errors.New("must choose a backend")
 	}
 
@@ -229,11 +229,13 @@ func (g *Mefs) NewGatewayLayer(creds madmin.Credentials) (minio.ObjectLayer, err
 	}
 
 	if gw.useMemo {
+		gw.memoRepoDir = viper.GetString("memo.repo_dir")
+
 		var repoDir string
-		if gw.repoDir == "" {
+		if gw.memoRepoDir == "" {
 			repoDir = gw.rootpath
 		} else {
-			repoDir = gw.repoDir
+			repoDir = gw.memoRepoDir
 		}
 		gw.memofs, err = memo.NewMemofs(repoDir)
 		if err != nil {
@@ -244,6 +246,15 @@ func (g *Mefs) NewGatewayLayer(creds madmin.Credentials) (minio.ObjectLayer, err
 	if gw.useIpfs {
 		host := viper.GetString("common.ipfs_host")
 		gw.ipfs = memo.NewIpfsClient(host)
+	}
+
+	if gw.useMeeda {
+		meeda_repo := viper.GetString("meeda.repo_dir")
+		url := viper.GetString("meeda.url")
+		gw.meedafs, err = memo.NewMeedaFs(meeda_repo, url)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	// 读取已使用的空间大小
@@ -271,14 +282,17 @@ type lfsGateway struct {
 	useLocal bool
 	useMemo  bool
 	useIpfs  bool
+	useMeeda bool
 
-	readOnly bool
-	repoDir  string
+	readOnly     bool
+	memoRepoDir  string
+	meedaRepoDir string
 
 	usedBytes uint64
 
 	memofs  *memo.MemoFs
 	localfs *utils.LocalFS
+	meedafs *memo.MeedaFs
 	Client  *miniogo.Core
 	ipfs    *memo.IpFs
 	polices map[string]*policy.Policy
@@ -339,9 +353,20 @@ func (l *lfsGateway) SetBucketPolicy(ctx context.Context, bucket string, bucketP
 
 // GetBucketPolicy will get policy on bucket.
 func (l *lfsGateway) GetBucketPolicy(ctx context.Context, bucket string) (*policy.Policy, error) {
-	bi, err := l.memofs.GetBucketInfo(ctx, bucket)
-	if err != nil {
-		return nil, err
+	var bi mtypes.BucketInfo
+	var err error
+	if l.useMeeda {
+		bi, err = l.meedafs.GetBucketInfo(ctx)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if l.useMemo {
+		bi, err = l.memofs.GetBucketInfo(ctx, bucket)
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	pb, ok := l.polices[bucket]
@@ -450,7 +475,7 @@ func (l *lfsGateway) GetBucketInfo(ctx context.Context, bucket string) (bi minio
 		}
 	}
 
-	if l.useLocal {
+	if l.useLocal || l.useMeeda {
 		return minio.BucketInfo{
 			Name: bucket,
 		}, nil
@@ -510,6 +535,7 @@ func (l *lfsGateway) DeleteBucket(ctx context.Context, bucket string, opts minio
 
 // ListObjects lists all blobs in LFS bucket filtered by prefix.
 func (l *lfsGateway) ListObjects(ctx context.Context, bucket, prefix, marker, delimiter string, maxKeys int) (loi minio.ListObjectsInfo, err error) {
+	log.Println("ListObjects ", bucket)
 	if delimiter == SlashSeparator && prefix == SlashSeparator {
 		return loi, nil
 	}
@@ -545,6 +571,33 @@ func (l *lfsGateway) ListObjects(ctx context.Context, bucket, prefix, marker, de
 		return loi, nil
 	}
 
+	if l.useMeeda {
+		mloi, err := l.meedafs.ListObjects(ctx, prefix, marker, delimiter, maxKeys)
+		if err != nil {
+			return loi, err
+		}
+		ud := make(map[string]string)
+		ud["x-amz-meta-mode"] = "33204"
+		for _, oi := range mloi.Objects {
+			etag, _ := metag.ToString(oi.ETag)
+			ud["x-amz-meta-mtime"] = strconv.FormatInt(oi.GetTime(), 10)
+			loi.Objects = append(loi.Objects, minio.ObjectInfo{
+				Bucket:      bucket,
+				Name:        oi.GetName(),
+				ModTime:     time.Unix(oi.GetTime(), 0).UTC(),
+				Size:        int64(oi.Size),
+				ETag:        etag,
+				UserDefined: ud,
+			})
+		}
+
+		loi.IsTruncated = mloi.IsTruncated
+		loi.NextMarker = mloi.NextMarker
+		loi.Prefixes = mloi.Prefixes
+
+		return loi, nil
+	}
+
 	if l.useS3 {
 		result, err := l.Client.ListObjects(bucket, prefix, marker, delimiter, maxKeys)
 		if err != nil {
@@ -553,8 +606,12 @@ func (l *lfsGateway) ListObjects(ctx context.Context, bucket, prefix, marker, de
 
 		return minio.FromMinioClientListBucketResult(bucket, result), nil
 	}
-	return l.localfs.ListObjects(bucket)
 
+	if l.useLocal {
+		return l.localfs.ListObjects(bucket)
+	}
+
+	return loi, minio.ErrorRespToObjectError(err, bucket)
 }
 
 // ListObjectsV2 lists all blobs in LFS bucket filtered by prefix
@@ -563,13 +620,13 @@ func (l *lfsGateway) ListObjectsV2(ctx context.Context, bucket, prefix, continua
 	// if bucket != BucketName {
 	// 	return loiv2, minio.BucketNotFound{Bucket: bucket}
 	// }
-	// log.Println("ListObjectsV2 ", bucket)
+	log.Println("GetObjectNInfo ", bucket)
 	marker := continuationToken
 	if marker == "" {
 		marker = startAfter
 	}
 
-	if l.useMemo {
+	if l.useMemo || l.useMeeda {
 		loi, err := l.ListObjects(ctx, bucket, prefix, marker, delimiter, maxKeys)
 		if err != nil {
 			return loiv2, err
@@ -601,6 +658,7 @@ func (l *lfsGateway) ListObjectsV2(ctx context.Context, bucket, prefix, continua
 
 // GetObjectNInfo - returns object info and locked object ReadCloser
 func (l *lfsGateway) GetObjectNInfo(ctx context.Context, bucket, object string, rs *minio.HTTPRangeSpec, h http.Header, lockType minio.LockType, opts minio.ObjectOptions) (gr *minio.GetObjectReader, err error) {
+	log.Println("GetObjectNInfo ", object)
 	var objInfo minio.ObjectInfo
 	objInfo, err = l.GetObjectInfo(ctx, bucket, object, opts)
 	if err != nil {
@@ -642,6 +700,7 @@ func (e InvalidRange) Error() string {
 // startOffset indicates the starting read location of the object.
 // length indicates the total length of the object.
 func (l *lfsGateway) GetObject(ctx context.Context, bucketName, objectName string, startOffset, length int64, writer io.Writer, etag string, o minio.ObjectOptions) error {
+	log.Println("GetObject ", objectName)
 	if length < 0 && length != -1 {
 		return minio.ErrorRespToObjectError(minio.InvalidRange{}, bucketName, objectName)
 	}
@@ -652,6 +711,7 @@ func (l *lfsGateway) GetObject(ctx context.Context, bucketName, objectName strin
 
 	if l.useLocal {
 		object, size, err := l.localfs.GetObject(bucketName, objectName, startOffset)
+		fmt.Println("local object: ")
 		if err == nil {
 			defer object.Close()
 			reader := io.LimitReader(object, length)
@@ -714,6 +774,14 @@ func (l *lfsGateway) GetObject(ctx context.Context, bucketName, objectName strin
 		}
 		return nil
 	}
+
+	if l.useMeeda {
+		err := l.meedafs.GetObject(ctx, objectName, startOffset, length, writer)
+		if err != nil {
+			return err
+		}
+		return nil
+	}
 	if l.useS3 {
 		opts := miniogo.GetObjectOptions{}
 		opts.ServerSideEncryption = o.ServerSideEncryption
@@ -748,7 +816,7 @@ func (l *lfsGateway) GetObjectInfo(ctx context.Context, bucket, object string, o
 	// if bucket != BucketName {
 	// 	return objInfo, minio.BucketNotFound{Bucket: bucket}
 	// }
-	// log.Println("GetObjectInfo ", object)
+	log.Println("GetObjectInfo ", object)
 	if l.useIpfs {
 		objInfo.Size = -1
 		objInfo.Bucket = "nft"
@@ -787,22 +855,60 @@ func (l *lfsGateway) GetObjectInfo(ctx context.Context, bucket, object string, o
 		return minio.FromMinioClientObjectInfo(bucket, oi), nil
 	}
 
-	return l.localfs.GetObjectInfo(bucket, object)
+	if l.useMeeda {
+		moi, err := l.meedafs.GetObjectInfo(ctx, object)
+		if err != nil {
+			return objInfo, err
+		}
+		ud := make(map[string]string)
+		ud["x-amz-meta-mode"] = "33204"
+		ud["x-amz-meta-mtime"] = strconv.FormatInt(moi.GetTime(), 10)
+		// need handle ETag
+		etag, _ := metag.ToString(moi.ETag)
+		oi := miniogo.ObjectInfo{
+			Key:  moi.Name,
+			ETag: etag,
+			Size: int64(moi.Size),
+		}
+
+		return minio.FromMinioClientObjectInfo(bucket, oi), nil
+	}
+	if l.useLocal {
+		moi, err := l.localfs.GetObjectInfo(bucket, object)
+		if err != nil {
+			return objInfo, err
+		}
+		ud := make(map[string]string)
+		ud["x-amz-meta-mode"] = "33204"
+		ud["x-amz-meta-mtime"] = strconv.FormatInt(moi.ModTime.Unix(), 10)
+
+		oi := miniogo.ObjectInfo{
+			Key:  moi.Name,
+			ETag: moi.ETag,
+			Size: int64(moi.Size),
+		}
+
+		return minio.FromMinioClientObjectInfo(bucket, oi), nil
+	}
+
+	return objInfo, minio.ObjectNotFound{Bucket: bucket, Object: object}
 }
 
 // spilt reader to qiniu and memo
-func readerSpilt(reader io.Reader, reader1, reader2 *bytes.Buffer) error {
-	b, err := ioutil.ReadAll(reader)
+func readerSpilt(reader io.Reader, reader1, reader2 *bytes.Buffer) ([]byte, error) {
+	b, err := io.ReadAll(reader)
 	if err != nil {
 		log.Println("readerspilt err: ", err)
+		return nil, err
 	}
 	reader1.Write(b)
 	reader2.Write(b)
-	return err
+	return b, err
 }
 
 // PutObject creates a new object with the incoming data.
 func (l *lfsGateway) PutObject(ctx context.Context, bucket, object string, r *minio.PutObjReader, opts minio.ObjectOptions) (objInfo minio.ObjectInfo, err error) {
+	log.Println("PutObject ", object)
 	if l.readOnly {
 		return objInfo, minio.PrefixAccessDenied{Bucket: bucket}
 	}
@@ -851,10 +957,32 @@ func (l *lfsGateway) PutObject(ctx context.Context, bucket, object string, r *mi
 		}
 	}
 
+	if l.useMeeda {
+		b, err := io.ReadAll(reader)
+		if err != nil {
+			log.Println("readerspilt err: ", err)
+			return objInfo, err
+		}
+
+		id, err := l.meedafs.Putobject(b)
+		if err != nil {
+			return objInfo, err
+		}
+
+		oi = miniogo.ObjectInfo{
+			ETag:     id,
+			Size:     int64(len(b)),
+			Key:      object,
+			Metadata: minio.ToMinioClientObjectInfoMetadata(opts.UserDefined),
+		}
+
+		return minio.FromMinioClientObjectInfo(bucket, oi), nil
+	}
+
 	if l.useS3 && l.useMemo {
 		reader1 := new(bytes.Buffer)
 		reader2 := new(bytes.Buffer)
-		err = readerSpilt(reader, reader1, reader2)
+		_, err := readerSpilt(reader, reader1, reader2)
 		if err != nil {
 			return objInfo, err
 		}
@@ -893,7 +1021,7 @@ func (l *lfsGateway) PutObject(ctx context.Context, bucket, object string, r *mi
 	if l.useIpfs && l.useMemo {
 		reader1 := new(bytes.Buffer)
 		reader2 := new(bytes.Buffer)
-		err = readerSpilt(reader, reader1, reader2)
+		_, err = readerSpilt(reader, reader1, reader2)
 		if err != nil {
 			return objInfo, err
 		}

@@ -3,6 +3,7 @@ module github.com/memoio/mefs-gateway
 go 1.16
 
 require (
+	github.com/ethereum/go-ethereum v1.10.12
 	github.com/ipfs/go-blockservice v0.2.1
 	github.com/ipfs/go-datastore v0.5.1
 	github.com/ipfs/go-ipfs-api v0.3.0
