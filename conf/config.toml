@@ -1,13 +1,13 @@
 [common]
-use_local = true
+use_local = false
 use_s3 = false
 use_memo = false
 use_ipfs = false
-use_meeda = false
+use_meeda = true
 read_only = false
 repo_dir = "~/user"
 max_upload_bytes = 1099511627776 # 1TiB
-bucketname = "mefstest"          # set bucketname the gateway to use
+bucketname = "test3"             # set bucketname the gateway to use
 root_dir = "~/.mefs_gw"
 local_dir = ""
 ipfs_host = "127.0.0.1:5002"
@@ -24,5 +24,5 @@ secretkey = "VHr2Q1q3dRfZ7nXZPUnmRtlM0Wh_hDAWbzniSIlZ"
 repo_dir = "~/user_meeda"
 url = "http://183.240.197.189:48082"
 
-[mefs]
+[memo]
 repo_dir = "~/user_memo"

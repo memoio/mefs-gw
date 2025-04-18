@@ -12,6 +12,7 @@ import (
 	"os"
 	"path"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -207,7 +208,7 @@ func (g *Mefs) NewGatewayLayer(creds madmin.Credentials) (minio.ObjectLayer, err
 		}
 
 		// 扫描所有的Bucket进行判断
-		for i := 0; i < len(bs); i++ {
+		for i := range bs {
 			if bs[i].Name == BucketName {
 				break
 			}
@@ -229,17 +230,30 @@ func (g *Mefs) NewGatewayLayer(creds madmin.Credentials) (minio.ObjectLayer, err
 	}
 
 	if gw.useMemo {
-		gw.memoRepoDir = viper.GetString("memo.repo_dir")
+		repoDir := viper.GetString("memo.repo_dir")
 
-		var repoDir string
-		if gw.memoRepoDir == "" {
+		if repoDir == "" {
 			repoDir = gw.rootpath
-		} else {
-			repoDir = gw.memoRepoDir
 		}
 		gw.memofs, err = memo.NewMemofs(repoDir)
 		if err != nil {
 			return nil, err
+		}
+
+		// check bucket if exist
+		bi, err := gw.memofs.GetBucketInfo(context.Background(), BucketName)
+		if err != nil {
+			if !strings.Contains(err.Error(), "already exist") {
+				return nil, err
+			}
+			err = gw.memofs.MakeBucketWithLocation(context.Background(), BucketName)
+			if err != nil {
+				return nil, err
+			}
+		}
+
+		if !bi.Confirmed {
+			time.Sleep(1 * time.Minute)
 		}
 	}
 
@@ -284,9 +298,9 @@ type lfsGateway struct {
 	useIpfs  bool
 	useMeeda bool
 
-	readOnly     bool
-	memoRepoDir  string
-	meedaRepoDir string
+	readOnly bool
+	// memoRepoDir  string
+	// meedaRepoDir string
 
 	usedBytes uint64
 
@@ -945,179 +959,288 @@ func (l *lfsGateway) PutObject(ctx context.Context, bucket, object string, r *mi
 	}
 
 	var reader io.Reader = limitedReader
+	var moi minio.ObjectInfo
+
+	b, err := io.ReadAll(reader)
+	if err != nil {
+		return objInfo, err
+	}
+	if l.useMemo {
+		readerMemo := new(bytes.Buffer)
+		readerMemo.Write(b)
+		moi, err = l.putObjectMemo(ctx, bucket, object, readerMemo, opts)
+		if err != nil {
+			return objInfo, err
+		}
+		log.Println("put object Memo success")
+	}
+
+	if l.useLocal {
+		readerLocal := new(bytes.Buffer)
+		readerLocal.Write(b)
+		go func(reader io.Reader) {
+			_, err := l.putObjectLocal(ctx, bucket, object, reader, opts)
+			if err != nil {
+				log.Println("put object Local error:", err)
+			}
+			log.Println("put object Local success")
+		}(readerLocal)
+	}
+
+	if l.useMeeda {
+		go func(b1 []byte) {
+			_, err = l.putObjectMeeda(ctx, bucket, object, b1, opts)
+			if err != nil {
+				log.Println("put object Meeda error:", err)
+			}
+			log.Println("put object Meeda success")
+		}(b)
+	}
+
+	if l.useS3 {
+		readerS3 := new(bytes.Buffer)
+		readerS3.Write(b)
+		go func(reader io.Reader, size int64) {
+			_, err = l.putObjectS3(ctx, bucket, object, reader, size, putOpts)
+			if err != nil {
+				log.Println("put object S3 error:", err)
+			}
+			log.Println("put object S3 success")
+		}(readerS3, data.Size())
+
+	}
+
+	// 如果要存到本地
+	// if l.useLocal {
+	// 	moi, err = l.putObjectLocal(ctx, bucket, object, reader, opts)
+	// 	if err != nil {
+	// 		return objInfo, err
+	// 	}
+	// }
+
+	// if l.useS3 && l.useMemo {
+	// 	reader1 := new(bytes.Buffer)
+	// 	reader2 := new(bytes.Buffer)
+	// 	b, err := readerSpilt(reader, reader1, reader2)
+	// 	if err != nil {
+	// 		return objInfo, err
+	// 	}
+	// 	hashReader, err := minio.NewhashReader(reader1, data.Size(), "", "", data.Size())
+	// 	if err != nil {
+	// 		return objInfo, err
+	// 	}
+	// 	rawReader := hashReader
+	// 	pReader := minio.NewPutObjReader(rawReader)
+	// 	moi, err := l.memofs.PutObject(ctx, bucket, object, reader2, opts.UserDefined)
+	// 	if err != nil {
+	// 		return objInfo, err
+	// 	}
+	// 	etag, _ := metag.ToString(moi.ETag)
+	// 	oi = miniogo.ObjectInfo{
+	// 		ETag:     etag,
+	// 		Size:     int64(moi.Size),
+	// 		Key:      object,
+	// 		Metadata: minio.ToMinioClientObjectInfoMetadata(opts.UserDefined),
+	// 	}
+
+	// 	go func(pr *minio.PutObjReader, size int64) {
+	// 		qBucketname := viper.GetString("common.bucketname")
+	// 		_, err := l.Client.PutObject(context.TODO(), qBucketname, object, pReader, size, "", "", putOpts)
+	// 		if err != nil {
+	// 			log.Println("put object error:", err)
+	// 		} else {
+	// 			log.Println("Success!")
+	// 		}
+	// 	}(pReader, data.Size())
+	// 	if l.useMeeda {
+	// 		go func(b1 []byte) {
+	// 			_, err := l.meedafs.Putobject(b1)
+	// 			if err != nil {
+	// 				log.Println("put object error:", err)
+	// 			} else {
+	// 				log.Println("Success!")
+	// 			}
+	// 		}(b)
+	// 	}
+
+	// 	if l.useLocal {
+	// 		closer.Close()
+	// 		err = l.localfs.FinishPut(bucket, object, oi.Size, true)
+	// 		if err != nil {
+	// 			log.Println("finish put error:", err)
+	// 		}
+	// 	}
+
+	// 	l.addUsedBytes(limitedReader.ReadedBytes())
+	// 	return minio.FromMinioClientObjectInfo(bucket, oi), nil
+	// }
+
+	// if l.useIpfs && l.useMemo {
+	// 	reader1 := new(bytes.Buffer)
+	// 	reader2 := new(bytes.Buffer)
+	// 	_, err = readerSpilt(reader, reader1, reader2)
+	// 	if err != nil {
+	// 		return objInfo, err
+	// 	}
+	// 	moi, err := l.memofs.PutObject(ctx, bucket, object, reader2, opts.UserDefined)
+	// 	if err != nil {
+	// 		return objInfo, err
+	// 	}
+	// 	etag, _ := metag.ToString(moi.ETag)
+	// 	oi = miniogo.ObjectInfo{
+	// 		ETag:     etag,
+	// 		Size:     int64(moi.Size),
+	// 		Key:      object,
+	// 		Metadata: minio.ToMinioClientObjectInfoMetadata(opts.UserDefined),
+	// 	}
+
+	// 	go func(reader io.Reader) {
+	// 		_, err := l.ipfs.Putobject(reader)
+	// 		if err != nil {
+	// 			log.Println("put object error:", err)
+	// 		} else {
+	// 			log.Println("Success!")
+	// 		}
+	// 	}(reader1)
+
+	// 	l.addUsedBytes(limitedReader.ReadedBytes())
+	// 	return minio.FromMinioClientObjectInfo(bucket, oi), nil
+	// }
+	// if l.useMemo {
+	// 	moi, err := l.memofs.PutObject(ctx, bucket, object, reader, opts.UserDefined)
+	// 	if err != nil {
+	// 		return objInfo, err
+	// 	}
+	// 	etag, _ := metag.ToString(moi.ETag)
+	// 	oi = miniogo.ObjectInfo{
+	// 		ETag:     etag,
+	// 		Size:     int64(moi.Size),
+	// 		Key:      object,
+	// 		Metadata: minio.ToMinioClientObjectInfoMetadata(opts.UserDefined),
+	// 	}
+	// 	l.addUsedBytes(limitedReader.ReadedBytes())
+	// 	return minio.FromMinioClientObjectInfo(bucket, oi), nil
+	// }
+
+	// if l.useS3 {
+	// 	ui, err := l.Client.PutObject(ctx, bucket, object, reader, data.Size(), data.MD5Base64String(), data.SHA256HexString(), putOpts)
+	// 	if err != nil {
+	// 		if l.useLocal {
+	// 			closer.Close()
+	// 			err = l.localfs.FinishPut(bucket, object, 0, false)
+	// 			if err != nil {
+	// 				return objInfo, minio.ErrorRespToObjectError(err, bucket, object)
+	// 			}
+	// 		}
+	// 		return objInfo, minio.ErrorRespToObjectError(err, bucket, object)
+	// 	}
+
+	// 	// On success, populate the key & metadata so they are present in the notification
+	// 	oi = miniogo.ObjectInfo{
+	// 		ETag:     ui.ETag,
+	// 		Size:     ui.Size,
+	// 		Key:      object,
+	// 		Metadata: minio.ToMinioClientObjectInfoMetadata(opts.UserDefined),
+	// 	}
+	// } else {
+	// 	w := &utils.EmptyWriter{}
+	// 	_, err := io.Copy(w, reader)
+	// 	if err != nil {
+	// 		if l.useLocal {
+	// 			closer.Close()
+	// 			err = l.localfs.FinishPut(bucket, object, 0, false)
+	// 			if err != nil {
+	// 				return objInfo, minio.ErrorRespToObjectError(err, bucket, object)
+	// 			}
+	// 		}
+
+	// 		return objInfo, minio.ErrorRespToObjectError(err, bucket, object)
+	// 	}
+
+	// 	// On success, populate the key & metadata so they are present in the notification
+	// 	oi = miniogo.ObjectInfo{
+	// 		Size:     w.Size(),
+	// 		Key:      object,
+	// 		Metadata: minio.ToMinioClientObjectInfoMetadata(opts.UserDefined),
+	// 	}
+	// }
+
+	// 记录新增的存储空间
+	l.addUsedBytes(limitedReader.ReadedBytes())
+
+	return moi, nil
+}
+
+func (l *lfsGateway) putObjectMemo(ctx context.Context, bucket, object string, reader io.Reader, opts minio.ObjectOptions) (objInfo minio.ObjectInfo, err error) {
+	moi, err := l.memofs.PutObject(ctx, bucket, object, reader, opts.UserDefined)
+	if err != nil {
+		return objInfo, err
+	}
+	etag, _ := metag.ToString(moi.ETag)
+	oi := miniogo.ObjectInfo{
+		ETag:     etag,
+		Size:     int64(moi.Size),
+		Key:      object,
+		Metadata: minio.ToMinioClientObjectInfoMetadata(opts.UserDefined),
+	}
+
+	return minio.FromMinioClientObjectInfo(bucket, oi), nil
+}
+
+func (l *lfsGateway) putObjectS3(ctx context.Context, bucket, object string, reader io.Reader, size int64, putOpts miniogo.PutObjectOptions) (objInfo minio.ObjectInfo, err error) {
+	hashReader, err := minio.NewhashReader(reader, size, "", "", size)
+	if err != nil {
+		return objInfo, err
+	}
+	rawReader := hashReader
+	pReader := minio.NewPutObjReader(rawReader)
+
+	ui, err := l.Client.PutObject(ctx, bucket, object, pReader, size, "", "", putOpts)
+	if err != nil {
+		return objInfo, minio.ErrorRespToObjectError(err, bucket, object)
+	}
+
+	// On success, populate the key & metadata so they are present in the notification
+	oi := miniogo.ObjectInfo{
+		ETag:     ui.ETag,
+		Size:     ui.Size,
+		Key:      object,
+		Metadata: minio.ToMinioClientObjectInfoMetadata(putOpts.UserMetadata),
+	}
+
+	return minio.FromMinioClientObjectInfo(bucket, oi), nil
+}
+
+func (l *lfsGateway) putObjectLocal(ctx context.Context, bucket, object string, reader io.Reader, opts minio.ObjectOptions) (objInfo minio.ObjectInfo, err error) {
 	var closer io.Closer
 
 	var oi miniogo.ObjectInfo
 
-	// 如果要存到本地
-	if l.useLocal {
-		reader, closer, err = l.localfs.PutObject(bucket, object, reader)
-		if err != nil {
-			return objInfo, minio.ErrorRespToObjectError(err, bucket, object)
-		}
+	reader, closer, err = l.localfs.PutObject(bucket, object, reader)
+	if err != nil {
+		return objInfo, minio.ErrorRespToObjectError(err, bucket, object)
 	}
 
-	if l.useMeeda {
-		b, err := io.ReadAll(reader)
-		if err != nil {
-			log.Println("readerspilt err: ", err)
-			return objInfo, err
-		}
-
-		id, err := l.meedafs.Putobject(b)
-		if err != nil {
-			return objInfo, err
-		}
-
-		oi = miniogo.ObjectInfo{
-			ETag:     id,
-			Size:     int64(len(b)),
-			Key:      object,
-			Metadata: minio.ToMinioClientObjectInfoMetadata(opts.UserDefined),
-		}
-
-		return minio.FromMinioClientObjectInfo(bucket, oi), nil
+	closer.Close()
+	err = l.localfs.FinishPut(bucket, object, oi.Size, true)
+	if err != nil {
+		return objInfo, minio.ErrorRespToObjectError(err, bucket, object)
 	}
 
-	if l.useS3 && l.useMemo {
-		reader1 := new(bytes.Buffer)
-		reader2 := new(bytes.Buffer)
-		_, err := readerSpilt(reader, reader1, reader2)
-		if err != nil {
-			return objInfo, err
-		}
-		hashReader, err := minio.NewhashReader(reader1, data.Size(), "", "", data.Size())
-		if err != nil {
-			return objInfo, err
-		}
-		rawReader := hashReader
-		pReader := minio.NewPutObjReader(rawReader)
-		moi, err := l.memofs.PutObject(ctx, bucket, object, reader2, opts.UserDefined)
-		if err != nil {
-			return objInfo, err
-		}
-		etag, _ := metag.ToString(moi.ETag)
-		oi = miniogo.ObjectInfo{
-			ETag:     etag,
-			Size:     int64(moi.Size),
-			Key:      object,
-			Metadata: minio.ToMinioClientObjectInfoMetadata(opts.UserDefined),
-		}
+	return minio.FromMinioClientObjectInfo(bucket, oi), nil
+}
 
-		go func(pr *minio.PutObjReader, size int64) {
-			qBucketname := viper.GetString("common.bucketname")
-			_, err := l.Client.PutObject(context.TODO(), qBucketname, object, pReader, size, "", "", putOpts)
-			if err != nil {
-				log.Println("put object error:", err)
-			} else {
-				log.Println("Success!")
-			}
-		}(pReader, data.Size())
-
-		l.addUsedBytes(limitedReader.ReadedBytes())
-		return minio.FromMinioClientObjectInfo(bucket, oi), nil
+func (l *lfsGateway) putObjectMeeda(ctx context.Context, bucket, object string, data []byte, opts minio.ObjectOptions) (objInfo minio.ObjectInfo, err error) {
+	id, err := l.meedafs.Putobject(data)
+	if err != nil {
+		return objInfo, err
 	}
-
-	if l.useIpfs && l.useMemo {
-		reader1 := new(bytes.Buffer)
-		reader2 := new(bytes.Buffer)
-		_, err = readerSpilt(reader, reader1, reader2)
-		if err != nil {
-			return objInfo, err
-		}
-		moi, err := l.memofs.PutObject(ctx, bucket, object, reader2, opts.UserDefined)
-		if err != nil {
-			return objInfo, err
-		}
-		etag, _ := metag.ToString(moi.ETag)
-		oi = miniogo.ObjectInfo{
-			ETag:     etag,
-			Size:     int64(moi.Size),
-			Key:      object,
-			Metadata: minio.ToMinioClientObjectInfoMetadata(opts.UserDefined),
-		}
-
-		go func(reader io.Reader) {
-			_, err := l.ipfs.Putobject(reader)
-			if err != nil {
-				log.Println("put object error:", err)
-			} else {
-				log.Println("Success!")
-			}
-		}(reader1)
-
-		l.addUsedBytes(limitedReader.ReadedBytes())
-		return minio.FromMinioClientObjectInfo(bucket, oi), nil
+	oi := miniogo.ObjectInfo{
+		ETag:     id,
+		Size:     int64(len(data)),
+		Key:      object,
+		Metadata: minio.ToMinioClientObjectInfoMetadata(opts.UserDefined),
 	}
-	if l.useMemo {
-		moi, err := l.memofs.PutObject(ctx, bucket, object, reader, opts.UserDefined)
-		if err != nil {
-			return objInfo, err
-		}
-		etag, _ := metag.ToString(moi.ETag)
-		oi = miniogo.ObjectInfo{
-			ETag:     etag,
-			Size:     int64(moi.Size),
-			Key:      object,
-			Metadata: minio.ToMinioClientObjectInfoMetadata(opts.UserDefined),
-		}
-		l.addUsedBytes(limitedReader.ReadedBytes())
-		return minio.FromMinioClientObjectInfo(bucket, oi), nil
-	}
-
-	if l.useS3 {
-		ui, err := l.Client.PutObject(ctx, bucket, object, reader, data.Size(), data.MD5Base64String(), data.SHA256HexString(), putOpts)
-		if err != nil {
-			if l.useLocal {
-				closer.Close()
-				err = l.localfs.FinishPut(bucket, object, 0, false)
-				if err != nil {
-					return objInfo, minio.ErrorRespToObjectError(err, bucket, object)
-				}
-			}
-			return objInfo, minio.ErrorRespToObjectError(err, bucket, object)
-		}
-
-		// On success, populate the key & metadata so they are present in the notification
-		oi = miniogo.ObjectInfo{
-			ETag:     ui.ETag,
-			Size:     ui.Size,
-			Key:      object,
-			Metadata: minio.ToMinioClientObjectInfoMetadata(opts.UserDefined),
-		}
-	} else {
-		w := &utils.EmptyWriter{}
-		_, err := io.Copy(w, reader)
-		if err != nil {
-			if l.useLocal {
-				closer.Close()
-				err = l.localfs.FinishPut(bucket, object, 0, false)
-				if err != nil {
-					return objInfo, minio.ErrorRespToObjectError(err, bucket, object)
-				}
-			}
-
-			return objInfo, minio.ErrorRespToObjectError(err, bucket, object)
-		}
-
-		// On success, populate the key & metadata so they are present in the notification
-		oi = miniogo.ObjectInfo{
-			Size:     w.Size(),
-			Key:      object,
-			Metadata: minio.ToMinioClientObjectInfoMetadata(opts.UserDefined),
-		}
-	}
-
-	if l.useLocal {
-		closer.Close()
-		err = l.localfs.FinishPut(bucket, object, oi.Size, true)
-		if err != nil {
-			return objInfo, minio.ErrorRespToObjectError(err, bucket, object)
-		}
-	}
-
-	// 记录新增的存储空间
-	l.addUsedBytes(limitedReader.ReadedBytes())
 
 	return minio.FromMinioClientObjectInfo(bucket, oi), nil
 }
