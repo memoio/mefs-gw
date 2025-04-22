@@ -1,0 +1,28 @@
+[common]
+use_local = false
+use_s3 = false
+use_memo = false
+use_ipfs = false
+use_meeda = true
+read_only = false
+repo_dir = "~/user"
+max_upload_bytes = 1099511627776 # 1TiB
+bucketname = "test3"             # set bucketname the gateway to use
+root_dir = "~/.mefs_gw"
+local_dir = ""
+ipfs_host = "127.0.0.1:5002"
+console = ":8080"
+endpoint = "0.0.0.0:5080"
+
+[s3]
+endpoint = "s3-qos.my-sz-1.qiniu-solutions.com:29091"
+region = "z0"
+accesskey = "22taR9gKak3fXfDYT-GqSjxGc_uslfiNC0ocxPK_"
+secretkey = "VHr2Q1q3dRfZ7nXZPUnmRtlM0Wh_hDAWbzniSIlZ"
+
+[meeda]
+repo_dir = "~/user_meeda"
+url = "http://183.240.197.189:48082"
+
+[memo]
+repo_dir = "~/user_memo"

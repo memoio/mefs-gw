@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"io/ioutil"
 	"os"
@@ -23,8 +24,8 @@ import (
 	"github.com/ipfs/go-unixfs/importer"
 	"golang.org/x/crypto/blake2b"
 
-	"github.com/minio/minio-go/v7/pkg/s3utils"
 	minio "github.com/memoio/minio/cmd"
+	"github.com/minio/minio-go/v7/pkg/s3utils"
 	"github.com/syndtr/goleveldb/leveldb"
 	"github.com/syndtr/goleveldb/leveldb/util"
 )
@@ -346,6 +347,7 @@ func (fs *LocalFS) GetObject(bucketName, objectName string, offset int64) (io.Re
 	if os.IsNotExist(err) {
 		return nil, 0, minio.ObjectNotFound{Bucket: bucketName, Object: objectName}
 	}
+	fmt.Println("local get: ", dirPath, nameHashStr)
 
 	objectPath := path.Join(dirPath, nameHashStr)
 	_, err = os.Stat(objectPath)
@@ -388,16 +390,18 @@ func (fs *LocalFS) GetObjectInfo(bucketName, objectName string) (minio.ObjectInf
 		Name:   objectName,
 	}
 	val, err := fs.meta.Get([]byte(GetObjectKey(bucketName, objectName)), nil)
-
 	if err != nil {
-		obInfo := &ObjectInfo{}
-		err = json.Unmarshal(val, obInfo)
-		if err != nil {
-			objectInfo.ModTime = time.Unix(obInfo.ModTime, 0)
-			objectInfo.Size = obInfo.Size
-		}
+		return objectInfo, err
 	}
+	obInfo := &ObjectInfo{}
+	err = json.Unmarshal(val, obInfo)
+	if err != nil {
+		return objectInfo, err
+	}
+	objectInfo.ModTime = time.Unix(obInfo.ModTime, 0)
+	objectInfo.Size = obInfo.Size
 
+	fmt.Println("local size: ", objectInfo.Size)
 	return objectInfo, nil
 }
 
@@ -424,7 +428,7 @@ func (fs *LocalFS) ListObjects(bucketName string) (loi minio.ListObjectsInfo, er
 		}
 		obInfo := &ObjectInfo{}
 		err = json.Unmarshal(val, obInfo)
-		if err != nil {
+		if err == nil {
 			objectInfo.ModTime = time.Unix(obInfo.ModTime, 0)
 			objectInfo.Size = obInfo.Size
 		}
@@ -432,6 +436,7 @@ func (fs *LocalFS) ListObjects(bucketName string) (loi minio.ListObjectsInfo, er
 		loi.Objects = append(loi.Objects, objectInfo)
 	}
 
+	fmt.Println("local list: ", loi)
 	return loi, nil
 }
 
@@ -459,9 +464,10 @@ func (fs *LocalFS) ListObjectsV2(bucketName string) (loi minio.ListObjectsV2Info
 		obInfo := &ObjectInfo{}
 		err = json.Unmarshal(val, obInfo)
 		if err != nil {
-			objectInfo.ModTime = time.Unix(obInfo.ModTime, 0)
-			objectInfo.Size = obInfo.Size
+			return loi, minio.ErrorRespToObjectError(err, bucketName)
 		}
+		objectInfo.ModTime = time.Unix(obInfo.ModTime, 0)
+		objectInfo.Size = obInfo.Size
 
 		loi.Objects = append(loi.Objects, objectInfo)
 	}
